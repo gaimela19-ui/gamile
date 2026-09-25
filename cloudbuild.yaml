@@ -1,7 +1,7 @@
 substitutions:
   _SERVICE_NAME: mypet
   _REGION: europe-west1
-  _MONGODB_URI: "mongodb+srv://omranmahmoud888:pass12345@cluster0.qaqt8ch.mongodb.net/mypets?retryWrites=true&w=majority&appName=Cluster0"
+  _MONGODB_URI: "mongodb+srv://omranmahmoud888:pass12345@cluster0.3soglw6.mongodb.net/gamila?retryWrites=true&w=majority&appName=Cluster0"
 
 steps:
   # Build using repo root as context and the root Dockerfile

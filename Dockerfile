@@ -10,7 +10,7 @@ FROM node:20-alpine
 ##
 
 ARG NODE_ENV=production
-ARG MONGODB_URI="mongodb+srv://omranmahmoud888:pass12345@cluster0.qaqt8ch.mongodb.net/mypets?retryWrites=true&w=majority&appName=Cluster0"
+ARG MONGODB_URI="mongodb+srv://omranmahmoud888:pass12345@cluster0.3soglw6.mongodb.net/gamila?retryWrites=true&w=majority&appName=Cluster0"
 
 WORKDIR /app/project
 
