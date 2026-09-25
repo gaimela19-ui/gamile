@@ -1,0 +1,36 @@
+substitutions:
+  _SERVICE_NAME: mypet
+  _REGION: europe-west1
+  _MONGODB_URI: "mongodb+srv://omranmahmoud888:pass12345@cluster0.qaqt8ch.mongodb.net/mypets?retryWrites=true&w=majority&appName=Cluster0"
+
+steps:
+  # Build using repo root as context and the root Dockerfile
+  - name: gcr.io/cloud-builders/docker
+    id: Build Image
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA
+      - -f
+      - Dockerfile
+      - .
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Deploy Service
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image=gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --set-env-vars
+      - MONGODB_URI=${_MONGODB_URI}
+
+images:
+  - gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
