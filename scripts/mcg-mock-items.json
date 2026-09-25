@@ -1,0 +1,4 @@
+[
+  { "ItemID": "TEST-1", "Barcode": "TEST-BC-1", "StockQuantity": 7 },
+  { "ItemID": "TEST-2", "Barcode": "TEST-BC-2", "StockQuantity": 0 }
+]
