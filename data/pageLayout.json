@@ -1,0 +1,14 @@
+{
+  "sections": [
+    {
+      "id": "x",
+      "type": "text",
+      "title": "X",
+      "enabled": true,
+      "order": 0,
+      "settings": {}
+    }
+  ],
+  "sectionGap": 8,
+  "updatedAt": "2025-10-20T13:35:48.707Z"
+}
