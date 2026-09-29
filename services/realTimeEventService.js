@@ -223,11 +223,3 @@ class RealTimeEventService {
 }
 
 export const realTimeEventService = new RealTimeEventService();
-
-// Start demo updates when the module is loaded unless DB is skipped.
-if (process.env.SKIP_DB === '1') {
-  console.warn('[realtime] SKIP_DB=1 – skipping periodic sales/inventory monitoring intervals');
-} else {
-  realTimeEventService.startPeriodicUpdates();
-  realTimeEventService.startInventoryAlerts();
-}
