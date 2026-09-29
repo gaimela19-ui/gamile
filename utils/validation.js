@@ -46,6 +46,10 @@ export async function validateImageUrl(url) {
 export function validateProductData(data) {
   const errors = [];
 
+  if (data.status === 'draft') {
+    return { isValid: true, errors };
+  }
+
   // Required fields
   if (!data.name?.trim()) {
     errors.push('Product name is required');
