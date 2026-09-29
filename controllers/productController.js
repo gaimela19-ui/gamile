@@ -1259,7 +1259,8 @@ export const createProduct = async (req, res) => {
     if (Array.isArray(req.body.categories)) {
       categoriesArray = req.body.categories.filter(c => c); // simple sanitize
     }
-    const simpleMode = !Array.isArray(req.body.colors) || req.body.colors.length === 0;
+    const hasVariants = Array.isArray(req.body.variants) && req.body.variants.length > 0;
+    const simpleMode = (!Array.isArray(req.body.colors) || req.body.colors.length === 0) && !hasVariants;
 
     // Normalize attributes if provided (accept ids or populated objects)
     const normalizeAttributes = (arr) => {
@@ -1286,6 +1287,47 @@ export const createProduct = async (req, res) => {
         .filter(Boolean);
     };
 
+    const normalizeVariants = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr.map((variant) => {
+        const attributes = Array.isArray(variant?.attributes) ? variant.attributes.map((item) => {
+          const attribute = typeof item?.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(item.attribute) ? item.attribute : null;
+          const value = typeof item?.value === 'string' && /^[a-fA-F0-9]{24}$/.test(item.value) ? item.value : null;
+          return attribute && value ? { attribute, value } : null;
+        }).filter(Boolean) : [];
+        return {
+          sku: typeof variant?.sku === 'string' ? variant.sku.trim() : undefined,
+          barcode: typeof variant?.barcode === 'string' ? variant.barcode.trim() : undefined,
+          price: variant?.price != null && Number.isFinite(Number(variant.price)) ? Number(variant.price) : undefined,
+          originalPrice: variant?.originalPrice != null && Number.isFinite(Number(variant.originalPrice)) ? Number(variant.originalPrice) : undefined,
+          stock: Math.max(0, Number(variant?.stock) || 0),
+          images: Array.isArray(variant?.images) ? variant.images.filter(image => typeof image === 'string' && image.trim()) : [],
+          attributes
+        };
+      }).filter(variant => variant.attributes.length > 0);
+    };
+
+    const normalizeAttributeImages = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr.map((item) => {
+        const attribute = typeof item?.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(item.attribute) ? item.attribute : null;
+        const value = typeof item?.value === 'string' && /^[a-fA-F0-9]{24}$/.test(item.value) ? item.value : null;
+        if (!attribute || !value) return null;
+        const priceAdjustment = item.priceAdjustment != null && Number.isFinite(Number(item.priceAdjustment)) ? Number(item.priceAdjustment) : undefined;
+        const stock = item.stock != null && Number.isFinite(Number(item.stock)) && Number(item.stock) >= 0 ? Number(item.stock) : undefined;
+        return {
+          attribute,
+          value,
+          images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string' && image.trim()) : [],
+          videoUrl: typeof item.videoUrl === 'string' ? item.videoUrl.trim() : undefined,
+          sku: typeof item.sku === 'string' ? item.sku.trim() : undefined,
+          priceAdjustment,
+          stock,
+          barcode: typeof item.barcode === 'string' ? item.barcode.trim() : undefined
+        };
+      }).filter(Boolean);
+    };
+
     // Normalize tags (allow array or comma-separated string)
     let tags = [];
     try {
@@ -1296,17 +1338,37 @@ export const createProduct = async (req, res) => {
       }
     } catch {}
 
+    const normalizedVariants = normalizeVariants(req.body.variants);
+    const lowStockThreshold = Number.isFinite(Number(req.body.lowStockThreshold)) ? Number(req.body.lowStockThreshold) : 5;
+    const stockQuantity = normalizedVariants.length
+      ? normalizedVariants.reduce((sum, variant) => sum + variant.stock, 0)
+      : Number(req.body.stock) || 0;
+
     const baseDoc = {
       name: req.body.name,
       description: req.body.description,
       price: req.body.price,
       originalPrice: req.body.originalPrice,
-      images: req.body.images,
+      images: Array.isArray(req.body.images) ? req.body.images : [],
       stock: req.body.stock,
       category: req.body.category,
       categories: categoriesArray,
       // optional brand
       brand: req.body.brand || undefined,
+      sku: req.body.sku,
+      barcode: req.body.barcode,
+      costPrice: req.body.costPrice,
+      lowStockThreshold,
+      stockStatus: stockQuantity > lowStockThreshold ? 'in_stock' : stockQuantity > 0 ? 'low_stock' : 'out_of_stock',
+      allowPreorder: !!req.body.allowPreorder,
+      subcategory: req.body.subcategory,
+      status: req.body.status === 'draft' ? 'draft' : 'active',
+      isActive: req.body.status !== 'draft',
+      weight: req.body.weight,
+      dimensions: req.body.dimensions,
+      shippingRequired: req.body.shippingRequired !== false,
+      productType: req.body.productType,
+      specifications: Array.isArray(req.body.specifications) ? req.body.specifications.filter(item => item && (item.name || item.value)).map(item => ({ name: String(item.name || '').trim(), value: String(item.value || '').trim() })) : [],
       // optional Rivhit mapping on create
       rivhitItemId: Number.isFinite(Number(req.body.rivhitItemId)) ? Number(req.body.rivhitItemId) : undefined,
       isNew: !!req.body.isNew,
@@ -1315,6 +1377,8 @@ export const createProduct = async (req, res) => {
       videoUrls,
       order: req.body.isFeatured ? await Product.countDocuments({ isFeatured: true }) : 0,
       attributes: normalizeAttributes(req.body.attributes),
+      variants: normalizedVariants,
+      attributeImages: normalizeAttributeImages(req.body.attributeImages),
       tags
     };
 
@@ -1337,6 +1401,10 @@ export const createProduct = async (req, res) => {
   // Populate categories before responding so client gets names immediately
   savedProduct = await savedProduct.populate(['category','categories','brand']);
 
+    if (savedProduct.status === 'draft') {
+      return res.status(201).json(savedProduct);
+    }
+
 
     // Find or create a default warehouse (used for initial inventory location info)
     let warehouse = await Warehouse.findOne();
@@ -1344,7 +1412,17 @@ export const createProduct = async (req, res) => {
       warehouse = await Warehouse.create({ name: 'Main Warehouse' });
     }
 
-    if (!simpleMode) {
+    if (hasVariants) {
+      const tasks = savedProduct.variants.map((variant) => inventoryService.addInventory({
+        product: savedProduct._id,
+        variantId: variant._id,
+        quantity: Number(variant.stock) || 0,
+        warehouse: warehouse?._id,
+        location: warehouse?.name,
+        lowStockThreshold
+      }, req.user?._id));
+      await Promise.all(tasks);
+    } else if (!simpleMode) {
       // Create inventory per color/size using inventoryService so MCG is updated immediately when enabled
       const colorArr = Array.isArray(req.body.colors) ? req.body.colors : [];
       const tasks = [];
@@ -1360,7 +1438,7 @@ export const createProduct = async (req, res) => {
               quantity: qty,
               warehouse: warehouse?._id,
               location: warehouse?.name,
-              lowStockThreshold: 5
+              lowStockThreshold
             }, req.user?._id)
           );
         }
@@ -1376,7 +1454,7 @@ export const createProduct = async (req, res) => {
         quantity: baseQty,
         warehouse: warehouse?._id,
         location: warehouse?.name,
-        lowStockThreshold: 5
+        lowStockThreshold
       }, req.user?._id);
     }
 

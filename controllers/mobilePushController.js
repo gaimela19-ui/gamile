@@ -119,7 +119,7 @@ export async function sendTestToMe(req, res) {
     }
     const result = await sendExpoPush({
       tokens: expoTokens,
-      title: 'Hello from My Pet',
+      title: 'Hello from gaimela',
       body: 'This is a test push notification',
       data: payloadData,
       badge: typeof badge === 'number' ? badge : undefined,

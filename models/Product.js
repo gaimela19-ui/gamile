@@ -3,12 +3,12 @@ import mongoose from 'mongoose';
 const productSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: [true, 'Product name is required'],
+    required: [function() { return this.status !== 'draft'; }, 'Product name is required'],
     trim: true
   },
   description: {
     type: String,
-    required: [true, 'Product description is required']
+    required: [function() { return this.status !== 'draft'; }, 'Product description is required']
   },
   // Localized fields (per-language overrides). Keys are language codes like 'ar', 'he', 'en'.
   name_i18n: {
@@ -23,7 +23,8 @@ const productSchema = new mongoose.Schema({
   },
   price: {
     type: Number,
-    required: [true, 'Product price is required'],
+    required: [function() { return this.status !== 'draft'; }, 'Product price is required'],
+    default: 0,
     min: [0, 'Price cannot be negative']
   },
   originalPrice: {
@@ -37,7 +38,7 @@ const productSchema = new mongoose.Schema({
   },
   images: [{
     type: String,
-    required: [true, 'At least one product image is required']
+    required: [function() { return this.status !== 'draft'; }, 'At least one product image is required']
   }],
   // Optional product videos (e.g., MP4, WebM, hosted links or CDN)
   videoUrls: [{
@@ -54,7 +55,7 @@ const productSchema = new mongoose.Schema({
   category: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category',
-    required: [true, 'Product category is required']
+    required: [function() { return this.status !== 'draft'; }, 'Product category is required']
   },
   // Optional brand association
   brand: {
@@ -143,8 +144,26 @@ const productSchema = new mongoose.Schema({
   }],
   stock: {
     type: Number,
-    required: [true, 'Product stock is required']
+    required: [function() { return this.status !== 'draft'; }, 'Product stock is required'],
+    default: 0
   },
+  sku: { type: String, trim: true },
+  barcode: { type: String, trim: true },
+  costPrice: { type: Number, min: 0 },
+  lowStockThreshold: { type: Number, min: 0, default: 5 },
+  stockStatus: { type: String, enum: ['in_stock', 'low_stock', 'out_of_stock'] },
+  allowPreorder: { type: Boolean, default: false },
+  subcategory: { type: String, trim: true },
+  status: { type: String, enum: ['active', 'draft'], default: 'active', index: true },
+  weight: { type: Number, min: 0 },
+  dimensions: {
+    length: { type: Number, min: 0 },
+    width: { type: Number, min: 0 },
+    height: { type: Number, min: 0 }
+  },
+  shippingRequired: { type: Boolean, default: true },
+  productType: { type: String, enum: ['physical', 'digital', 'service'], default: 'physical' },
+  specifications: [{ name: { type: String, trim: true }, value: { type: String, trim: true } }],
   relatedProducts: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product'
@@ -236,7 +255,12 @@ const productSchema = new mongoose.Schema({
   attributeImages: [{
     attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true },
     value: { type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue', required: true },
-    images: [{ type: String }]
+    images: [{ type: String }],
+    videoUrl: { type: String, trim: true },
+    sku: { type: String, trim: true },
+    priceAdjustment: { type: Number },
+    stock: { type: Number, min: 0 },
+    barcode: { type: String, trim: true }
   }]
 }, {
   timestamps: true,
