@@ -4,7 +4,7 @@ import Settings from '../models/Settings.js';
 
 const router = express.Router();
 
-const DEFAULT_STOREFRONT_URL = 'https://mypetils.netlify.app';
+const DEFAULT_STOREFRONT_URL = 'https://gaimelails.netlify.app';
 
 function xmlEscape(input) {
   return String(input || '')

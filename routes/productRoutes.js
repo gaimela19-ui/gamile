@@ -20,6 +20,7 @@ import {
   exportProductsCsv
 } from '../controllers/productController.js';
 import { videoUpload } from '../middleware/videoUpload.js';
+import { getProductPolicies, getProductPolicy, updateProductPolicy } from '../controllers/productPolicyController.js';
 import {
   getAllReviews,
   addReview,
@@ -48,6 +49,9 @@ router.get('/stats', adminAuth, getProductStats);
 router.get('/export/csv', adminAuth, exportProductsCsv);
 router.get('/search', searchProducts);
 router.get('/lite/:id', getProductLite);
+router.get('/policies', adminAuth, getProductPolicies);
+router.get('/policies/:key', getProductPolicy);
+router.put('/policies/:key', adminAuth, updateProductPolicy);
 // Place static paths before dynamic ':id' to avoid conflicts
 router.get('/:id/stock', getProductStock); // New endpoint for stock levels
 router.get('/:id', getProduct);
