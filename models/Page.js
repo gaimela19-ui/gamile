@@ -9,7 +9,8 @@ const pageSettingsSchema = new mongoose.Schema(
     pageTitle: { type: mongoose.Schema.Types.Mixed, default: {} },
     sidebar: { type: mongoose.Schema.Types.Mixed, default: {} },
     footer: { type: mongoose.Schema.Types.Mixed, default: {} },
-    mobile: { type: mongoose.Schema.Types.Mixed, default: {} }
+    mobile: { type: mongoose.Schema.Types.Mixed, default: {} },
+    productPolicyPoints: { type: [String], default: undefined }
   },
   { _id: false }
 );
