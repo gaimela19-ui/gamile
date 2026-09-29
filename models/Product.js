@@ -241,6 +241,7 @@ const productSchema = new mongoose.Schema({
     originalPrice: { type: Number, min: 0 },
     stock: { type: Number, default: 0 },
     images: [{ type: String }],
+    videoUrl: { type: String, trim: true },
     isActive: { type: Boolean, default: true },
     // The defining combination for this variant
     attributes: [{
@@ -257,10 +258,7 @@ const productSchema = new mongoose.Schema({
     value: { type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue', required: true },
     images: [{ type: String }],
     videoUrl: { type: String, trim: true },
-    sku: { type: String, trim: true },
-    priceAdjustment: { type: Number },
-    stock: { type: Number, min: 0 },
-    barcode: { type: String, trim: true }
+    priceAdjustment: { type: Number }
   }]
 }, {
   timestamps: true,

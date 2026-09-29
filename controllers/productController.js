@@ -1302,6 +1302,7 @@ export const createProduct = async (req, res) => {
           originalPrice: variant?.originalPrice != null && Number.isFinite(Number(variant.originalPrice)) ? Number(variant.originalPrice) : undefined,
           stock: Math.max(0, Number(variant?.stock) || 0),
           images: Array.isArray(variant?.images) ? variant.images.filter(image => typeof image === 'string' && image.trim()) : [],
+          videoUrl: typeof variant?.videoUrl === 'string' ? variant.videoUrl.trim() : undefined,
           attributes
         };
       }).filter(variant => variant.attributes.length > 0);
@@ -1314,16 +1315,12 @@ export const createProduct = async (req, res) => {
         const value = typeof item?.value === 'string' && /^[a-fA-F0-9]{24}$/.test(item.value) ? item.value : null;
         if (!attribute || !value) return null;
         const priceAdjustment = item.priceAdjustment != null && Number.isFinite(Number(item.priceAdjustment)) ? Number(item.priceAdjustment) : undefined;
-        const stock = item.stock != null && Number.isFinite(Number(item.stock)) && Number(item.stock) >= 0 ? Number(item.stock) : undefined;
         return {
           attribute,
           value,
           images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string' && image.trim()) : [],
           videoUrl: typeof item.videoUrl === 'string' ? item.videoUrl.trim() : undefined,
-          sku: typeof item.sku === 'string' ? item.sku.trim() : undefined,
-          priceAdjustment,
-          stock,
-          barcode: typeof item.barcode === 'string' ? item.barcode.trim() : undefined
+          priceAdjustment
         };
       }).filter(Boolean);
     };
