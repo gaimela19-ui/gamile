@@ -207,7 +207,7 @@ async function resolveCategoryAndDescendants(categoryParam, options = {}) {
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function buildProductQuery(params) {
-  const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory, tag, tags } = params;
+  const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory, tag, tags, attributeFilters } = params;
   const includeHiddenCategories = includeInactive === 'true';
   let query = {};
 
@@ -307,6 +307,29 @@ async function buildProductQuery(params) {
   const sizeList = [size, ...(sizes ? String(sizes).split(',') : [])]
     .filter(Boolean).map(s => s.trim());
   if (sizeList.length) query['colors.sizes.name'] = { $in: sizeList };
+
+  const attributeFilterTokens = (Array.isArray(attributeFilters) ? attributeFilters : String(attributeFilters || '').split(','))
+    .map(token => String(token).trim())
+    .map(token => token.match(/^attribute:([a-f\d]{24}):([a-f\d]{24})$/i))
+    .filter(Boolean);
+  const attributeValuesById = new Map();
+  for (const match of attributeFilterTokens) {
+    const attributeId = match[1].toLowerCase();
+    const valueId = match[2].toLowerCase();
+    if (!attributeValuesById.has(attributeId)) attributeValuesById.set(attributeId, new Set());
+    attributeValuesById.get(attributeId).add(valueId);
+  }
+  const attributeConditions = Array.from(attributeValuesById, ([attributeId, valueIds]) => ({
+    attributes: {
+      $elemMatch: {
+        attribute: toObjectId(attributeId),
+        values: { $in: castObjectIdArray(Array.from(valueIds)) }
+      }
+    }
+  }));
+  if (attributeConditions.length) {
+    query.$and = [...(query.$and || []), ...attributeConditions];
+  }
 
   // Tags filter: ?tag=accessories or ?tags=a,b
   const tagList = [tag, ...(tags ? String(tags).split(',') : [])]
@@ -780,6 +803,7 @@ export const getProductFilters = async (req, res) => {
         sizes: [],
         colors: [],
         colorObjects: [],
+        attributes: [],
         categories: [],
         _ms: Date.now() - start
       });
@@ -803,6 +827,7 @@ export const getProductFilters = async (req, res) => {
       toKey(req.query.search),
       toKey(req.query.colors),
       toKey(req.query.sizes),
+      toKey(req.query.attributeFilters),
       toKey(req.query.minPrice),
       toKey(req.query.maxPrice),
       toKey(req.query.onSale),
@@ -946,6 +971,41 @@ export const getProductFilters = async (req, res) => {
     const seenColorObjCI = new Set();
     const dedupColorObjects = colorObjects.filter(c=>{ if (!c || !c.name) return false; const nm = String(c.name).trim(); if (!nm) return false; const code = c.code ? String(c.code).trim() : undefined; const key = nm.toLowerCase()+'|'+(code||''); if (seenColorObjCI.has(key)) return false; seenColorObjCI.add(key); c.name = nm; if (code) c.code = code; return true; }).sort((a,b)=> a.name.localeCompare(b.name));
 
+    const attributeFacetDocs = await Product.aggregate([
+      { $match: baseQuery },
+      { $unwind: '$attributes' },
+      { $unwind: '$attributes.values' },
+      { $group: { _id: { attribute: '$attributes.attribute', value: '$attributes.values' } } },
+      { $lookup: { from: Attribute.collection.name, localField: '_id.attribute', foreignField: '_id', as: 'attribute' } },
+      { $unwind: '$attribute' },
+      { $lookup: { from: AttributeValue.collection.name, localField: '_id.value', foreignField: '_id', as: 'value' } },
+      { $unwind: '$value' },
+      { $sort: { 'attribute.order': 1, 'attribute.name': 1, 'value.order': 1, 'value.value': 1 } }
+    ]).allowDiskUse(false);
+    const attributeFacetMap = new Map();
+    const localizedFacetValue = (localized, lang, fallback) => {
+      const translation = localized?.get?.(lang) || localized?.[lang];
+      return typeof translation === 'string' && translation.trim() ? translation : fallback;
+    };
+    for (const doc of attributeFacetDocs) {
+      const attributeId = String(doc.attribute?._id || '');
+      const valueId = String(doc.value?._id || '');
+      if (!attributeId || !valueId) continue;
+      if (!attributeFacetMap.has(attributeId)) {
+        attributeFacetMap.set(attributeId, {
+          id: attributeId,
+          name: localizedFacetValue(doc.attribute.name_i18n, req.query.lang, doc.attribute.name),
+          type: doc.attribute.type,
+          values: []
+        });
+      }
+      attributeFacetMap.get(attributeId).values.push({
+        id: valueId,
+        name: localizedFacetValue(doc.value.value_i18n, req.query.lang, doc.value.value)
+      });
+    }
+    const attributes = Array.from(attributeFacetMap.values());
+
     // Adaptive price buckets
     const hasPriceData = matchCount > 0 && Number.isFinite(minPrice) && Number.isFinite(maxPrice);
     const rangeMin = hasPriceData ? Math.min(minPrice, maxPrice) : 0;
@@ -979,6 +1039,7 @@ export const getProductFilters = async (req, res) => {
       sizes,
       colors,
       colorObjects: dedupColorObjects,
+      attributes,
       categories: categoryDocs.map(c => ({ id: c._id, name: c.name, slug: c.slug })),
       brandCounts,
       _ms: Date.now() - start
