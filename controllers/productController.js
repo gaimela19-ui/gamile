@@ -1001,7 +1001,8 @@ export const getProductFilters = async (req, res) => {
       }
       attributeFacetMap.get(attributeId).values.push({
         id: valueId,
-        name: localizedFacetValue(doc.value.value_i18n, req.query.lang, doc.value.value)
+        name: localizedFacetValue(doc.value.value_i18n, req.query.lang, doc.value.value),
+        code: doc.value.meta?.colorHex
       });
     }
     const attributes = Array.from(attributeFacetMap.values());
