@@ -494,6 +494,43 @@ class InventoryService {
 
       const [result] = await Inventory.aggregate(pipeline).allowDiskUse(true);
       const items = Array.isArray(result?.items) ? result.items : [];
+      const productIds = [...new Set(items.filter(item => item.variantId).map(item => String(item.product?._id)).filter(Boolean))];
+      if (productIds.length) {
+        const products = await Product.find({ _id: { $in: productIds } })
+          .select('price currency variants attributeImages images')
+          .populate('variants.attributes.attribute', 'name')
+          .populate('variants.attributes.value', 'value')
+          .populate('attributeImages.attribute', 'name')
+          .populate('attributeImages.value', 'value')
+          .lean();
+        const productsById = new Map(products.map(product => [String(product._id), product]));
+        for (const item of items) {
+          if (!item.variantId) continue;
+          const product = productsById.get(String(item.product?._id));
+          const variant = product?.variants?.find(candidate => String(candidate._id) === String(item.variantId));
+          if (!variant) continue;
+          item.variantDetails = {
+            price: variant.price ?? product.price,
+            originalPrice: variant.originalPrice,
+            currency: product.currency,
+            images: Array.isArray(variant.images) ? variant.images : [],
+            attributes: (variant.attributes || []).map(attribute => {
+              const attributeId = String(attribute.attribute?._id || attribute.attribute || '');
+              const valueId = String(attribute.value?._id || attribute.value || '');
+              const media = (product.attributeImages || []).find(entry =>
+                String(entry.attribute?._id || entry.attribute) === attributeId &&
+                String(entry.value?._id || entry.value) === valueId
+              );
+              return {
+                name: attribute.attribute?.name || '',
+                value: attribute.value?.value || attribute.textValue || (attribute.numberValue != null ? String(attribute.numberValue) : ''),
+                image: media?.images?.[0] || variant.images?.[0] || product.images?.[0] || '',
+                priceAdjustment: media?.priceAdjustment
+              };
+            })
+          };
+        }
+      }
       const total = Array.isArray(result?.total) && result.total[0]?.count ? result.total[0].count : 0;
       const pageSize = Math.max(1, limit);
       const totalPages = pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1;
