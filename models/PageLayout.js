@@ -1,6 +1,11 @@
 import mongoose from 'mongoose';
 
 const pageLayoutSchema = new mongoose.Schema({
+  singletonKey: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
   sections: {
     type: [mongoose.Schema.Types.Mixed],
     default: []
@@ -14,33 +19,28 @@ const pageLayoutSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Ensure a singleton document pattern
-// Historically, multiple documents could be created. To avoid returning an older
-// layout after restarts, always select the most recently updated document and
-// prune any duplicates in the background.
 pageLayoutSchema.statics.getOrCreate = async function() {
-  // Prefer the latest updated layout if multiple exist
-  const docs = await this.find({}).sort({ updatedAt: -1 });
-  let doc = docs[0];
+  const existing = await this.findOne({ singletonKey: 'store' });
+  if (existing) return existing;
 
-  if (!doc) {
-    doc = await this.create({ sections: [], sectionGap: 6 });
-    return doc;
+  const latest = await this.findOne({}).sort({ updatedAt: -1, _id: -1 });
+  try {
+    if (latest) {
+      return await this.findOneAndUpdate(
+        { _id: latest._id },
+        { $set: { singletonKey: 'store' } },
+        { new: true }
+      );
+    }
+    return await this.findOneAndUpdate(
+      { singletonKey: 'store' },
+      { $setOnInsert: { sections: [], sectionGap: 6 } },
+      { upsert: true, new: true }
+    );
+  } catch (error) {
+    if (error.code === 11000) return this.findOne({ singletonKey: 'store' });
+    throw error;
   }
-
-  // Best-effort cleanup: remove older duplicates so subsequent calls are deterministic
-  if (docs.length > 1) {
-    const idsToDelete = docs.slice(1).map(d => d._id);
-    try { await this.deleteMany({ _id: { $in: idsToDelete } }); } catch {}
-  }
-
-  // Migration: ensure gap exists
-  if (typeof doc.sectionGap !== 'number') {
-    doc.sectionGap = 6;
-    try { await doc.save(); } catch {}
-  }
-
-  return doc;
 };
 
 const PageLayout = mongoose.model('PageLayout', pageLayoutSchema);
