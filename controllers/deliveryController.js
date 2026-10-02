@@ -521,7 +521,8 @@ export const sendOrder = async (req, res) => {
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction().catch(() => {});
     console.error('[delivery/send] failed:', error?.code || '', error?.message || error,
-      error?.details?.providerResponse ? JSON.stringify(error.details.providerResponse).slice(0, 1000) : '');
+      error?.details?.providerResponse ? JSON.stringify(error.details.providerResponse).slice(0, 1000) : '',
+      error?.details?.requestShape ? `sent field types: ${JSON.stringify(error.details.requestShape)}` : '');
     // Return actionable errors for preflight problems
     if (error && (error.code === 'MAPPING_MISSING' || error.code === 'PARAMS_MISSING')) {
       return res.status(StatusCodes.BAD_REQUEST).json({

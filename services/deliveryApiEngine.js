@@ -721,6 +721,9 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
       endpoint: safeEndpoint,
       requestId: lastRequestId,
       requestDispatched,
+      requestShape: requestMetadata.body && typeof requestMetadata.body === 'object' && !Array.isArray(requestMetadata.body)
+        ? Object.fromEntries(Object.entries(requestMetadata.body).map(([key, value]) => [key, value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value]))
+        : undefined,
       ...(options.includeRequest === true ? { request: sanitizeAndRedact(requestMetadata, secrets) } : {}),
     };
     await writeIntegrationLog(options.logModel === undefined ? DeliveryIntegrationLog : options.logModel,
