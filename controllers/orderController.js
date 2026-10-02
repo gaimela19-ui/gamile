@@ -17,6 +17,7 @@ import User from '../models/User.js';
 import { calculateShippingFee as calcShipFee } from '../services/shippingService.js';
 import DeliveryCompany from '../models/DeliveryCompany.js';
 import { sendToCompany, mapStatus, validateRequiredMappings, validateCompanyConfiguration } from '../services/deliveryIntegrationService.js';
+import { sanitizeDeliverySecrets } from '../utils/sanitizeDeliverySecrets.js';
 
 // Update (admin) - update recipient/customer info, shipping address (city/street), status, and optionally shipping fee
 export const updateOrder = async (req, res) => {
@@ -126,7 +127,7 @@ export const updateOrder = async (req, res) => {
     // Emit real-time event so admin dashboards refresh
     try { realTimeEventService.emitOrderUpdate(order); } catch {}
 
-    res.json({ message: 'Order updated', order });
+    res.json({ message: 'Order updated', order: sanitizeDeliverySecrets(order) });
   } catch (error) {
     console.error('Error updating order (admin):', error);
     res.status(500).json({ message: 'Failed to update order', error: error?.message });
@@ -831,7 +832,7 @@ export const getUserOrders = async (req, res) => {
         totalWithShipping: obj.totalWithShipping ?? ((obj.totalAmount || 0) + (obj.shippingFee || obj.deliveryFee || 0))
       };
     });
-    res.json(orders);
+    res.json(orders.map(sanitizeDeliverySecrets));
   } catch (error) {
     console.error('Error fetching user orders:', error);
     res.status(500).json({ message: 'Failed to fetch orders' });
@@ -894,7 +895,7 @@ export const getAllOrders = async (req, res) => {
         totalWithShipping: obj.totalWithShipping ?? ((obj.totalAmount || 0) + (obj.shippingFee || obj.deliveryFee || 0))
       };
     });
-    res.json(orders);
+    res.json(orders.map(sanitizeDeliverySecrets));
   } catch (error) {
     console.error('Error fetching all orders:', error);
     res.status(500).json({ message: 'Failed to fetch orders' });
@@ -914,7 +915,7 @@ export const getOrderPublic = async (req, res) => {
       effectiveShippingFee: obj.effectiveShippingFee ?? (obj.shippingFee || obj.deliveryFee || 0),
       totalWithShipping: obj.totalWithShipping ?? ((obj.totalAmount || 0) + (obj.shippingFee || obj.deliveryFee || 0))
     };
-    res.json({ order: response });
+    res.json({ order: sanitizeDeliverySecrets(response) });
   } catch (error) {
     console.error('Error fetching order by id:', error);
     res.status(500).json({ message: 'Failed to load order', error: error?.message });
@@ -947,7 +948,7 @@ export const updateOrderStatus = async (req, res) => {
     if (prevStatus === status) {
       return res.json({
         message: 'Order status updated successfully',
-        order
+        order: sanitizeDeliverySecrets(order)
       });
     }
 
@@ -1014,7 +1015,7 @@ export const updateOrderStatus = async (req, res) => {
 
     res.json({
       message: 'Order status updated successfully',
-      order
+      order: sanitizeDeliverySecrets(order)
     });
   } catch (error) {
     console.error('Error updating order status:', error);

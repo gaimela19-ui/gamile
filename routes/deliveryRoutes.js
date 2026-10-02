@@ -19,6 +19,12 @@ import {
   validateCompanyConfig,
   batchAssignOrders,
   batchSendOrders,
+  getIntegrationConfigurationMetadata,
+  listCompanyEndpoints,
+  createCompanyEndpoint,
+  updateCompanyEndpoint,
+  deleteCompanyEndpoint,
+  testConfiguredEndpoint,
 } from '../controllers/deliveryController.js';
 
 const router = express.Router();
@@ -36,10 +42,15 @@ router.post('/companies', deliveryAdminGuard, createCompany);
 router.get('/companies/:id', deliveryAdminGuard, getCompany);
 router.put('/companies/:id', deliveryAdminGuard, updateCompany);
 router.delete('/companies/:id', deliveryAdminGuard, deleteCompany);
+router.get('/integration-config/metadata', deliveryAdminGuard, getIntegrationConfigurationMetadata);
+router.get('/companies/:id/endpoints', deliveryAdminGuard, listCompanyEndpoints);
+router.post('/companies/:id/endpoints', deliveryAdminGuard, createCompanyEndpoint);
+router.put('/companies/:id/endpoints/:endpointId', deliveryAdminGuard, updateCompanyEndpoint);
+router.delete('/companies/:id/endpoints/:endpointId', deliveryAdminGuard, deleteCompanyEndpoint);
+router.post('/companies/:id/test-endpoint', deliveryAdminGuard, testConfiguredEndpoint);
 router.put('/companies/:id/field-mappings', deliveryAdminGuard, updateFieldMappings);
 router.post('/companies/:id/test-connection', deliveryAdminGuard, testConnection);
 // Validate config + show effective db sources
-router.get('/companies/:id/validate-config', deliveryAdminGuard, validateCompanyConfig);
 router.get('/companies/:id/validate-config', deliveryAdminGuard, validateCompanyConfig);
 
 // Public companies listing for checkout

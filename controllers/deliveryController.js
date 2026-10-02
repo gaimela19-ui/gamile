@@ -1,38 +1,181 @@
 import mongoose from 'mongoose';
 import DeliveryCompany from '../models/DeliveryCompany.js';
+import DeliveryIntegrationEndpoint from '../models/DeliveryIntegrationEndpoint.js';
+import DeliveryIntegrationLog from '../models/DeliveryIntegrationLog.js';
 import Order from '../models/Order.js';
 import { StatusCodes } from 'http-status-codes';
 import { sendToCompany, getDeliveryStatusFromCompany, testCompanyConnection, mapStatus, validateRequiredMappings, validateCompanyConfiguration } from '../services/deliveryIntegrationService.js';
+import { sanitizeDeliveryCompany, sanitizeDeliverySecrets } from '../utils/sanitizeDeliverySecrets.js';
+import { mergePreservingDeliverySecrets } from '../utils/mergeDeliverySecrets.js';
+import {
+  testConfiguredDeliveryEndpoint,
+  validateDeliveryIntegrationConfiguration,
+} from '../services/deliveryIntegrationConfiguration.js';
+import { DELIVERY_TEMPLATE_VARIABLES, DELIVERY_INTERNAL_STATUSES } from '../services/deliveryIntegrationConfiguration.js';
+
+async function getGenericActivationIssues(company) {
+  const integrationConfig = company.apiConfiguration?.integration || {};
+  if (company.isActive === false || (integrationConfig.executionMode !== 'generic' && integrationConfig.engineEnabled !== true)) return [];
+  const endpoints = company._id && company.isNew !== true
+    ? await DeliveryIntegrationEndpoint.find({ integration: company._id, isActive: true }).lean()
+    : [];
+  const validation = validateDeliveryIntegrationConfiguration(company, endpoints);
+  return validation.errors;
+}
+
+function safeEndpointResponse(endpoint) {
+  const plain = endpoint?.toObject
+    ? endpoint.toObject({ flattenMaps: true })
+    : { ...endpoint };
+  const queryParameterNames = Object.keys(plain.queryParameters || {});
+  delete plain.queryParameters;
+  const safe = sanitizeDeliverySecrets(plain);
+  safe.headerNames = Object.keys(plain.headers || {});
+  safe.queryParameterNames = queryParameterNames;
+  if (safe.authentication && plain.authentication?.headers) {
+    safe.authentication.headerNames = Object.keys(plain.authentication.headers);
+  }
+  return safe;
+}
 
 // List companies (admin)
 export const listCompanies = async (req, res) => {
   const companies = await DeliveryCompany.find().sort('name');
-  res.json(companies);
+  res.json(companies.map(sanitizeDeliveryCompany));
 };
 
 // Public active companies
 export const listActiveCompanies = async (req, res) => {
   const companies = await DeliveryCompany.find({ isActive: true }).sort('name');
-  res.json(companies);
+  res.json(companies.map(sanitizeDeliveryCompany));
 };
 
 // Get one company
 export const getCompany = async (req, res) => {
   const company = await DeliveryCompany.findById(req.params.id);
   if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
-  res.json(company);
+  res.json(sanitizeDeliveryCompany(company));
+};
+
+export const getIntegrationConfigurationMetadata = async (_req, res) => {
+  res.json({
+    templateVariables: DELIVERY_TEMPLATE_VARIABLES,
+    internalStatuses: DELIVERY_INTERNAL_STATUSES,
+    authenticationTypes: ['none', 'apiKey', 'bearer', 'basic', 'custom'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    environments: ['production', 'sandbox', 'staging', 'development', 'test', 'custom'],
+  });
+};
+
+export const listCompanyEndpoints = async (req, res) => {
+  const company = await DeliveryCompany.findById(req.params.id).select('_id');
+  if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
+  const endpoints = await DeliveryIntegrationEndpoint.find({ integration: company._id }).sort('name').lean();
+  res.json(endpoints.map(safeEndpointResponse));
+};
+
+export const createCompanyEndpoint = async (req, res) => {
+  const company = await DeliveryCompany.findById(req.params.id);
+  if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
+  const endpoint = new DeliveryIntegrationEndpoint({ ...req.body, integration: company._id });
+  await endpoint.validate();
+  const candidateEndpoints = [
+    ...(await DeliveryIntegrationEndpoint.find({ integration: company._id, isActive: true }).lean()),
+    endpoint.toObject({ flattenMaps: true }),
+  ];
+  const validation = validateDeliveryIntegrationConfiguration(company, candidateEndpoints);
+  if (validation.errors.some(issue => issue.includes(`Endpoint ${endpoint.name}:`))) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Endpoint configuration is invalid', issues: validation.errors });
+  }
+  await endpoint.save();
+  res.status(StatusCodes.CREATED).json(safeEndpointResponse(endpoint));
+};
+
+export const updateCompanyEndpoint = async (req, res) => {
+  const endpoint = await DeliveryIntegrationEndpoint.findOne({ _id: req.params.endpointId, integration: req.params.id });
+  if (!endpoint) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery endpoint not found' });
+  const updates = { ...req.body };
+  delete updates._id;
+  delete updates.integration;
+  delete updates.createdAt;
+  delete updates.updatedAt;
+  if (Object.prototype.hasOwnProperty.call(updates, 'headers')) {
+    updates.headers = mergePreservingDeliverySecrets(endpoint.headers, updates.headers, true);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'queryParameters')) {
+    updates.queryParameters = mergePreservingDeliverySecrets(endpoint.queryParameters, updates.queryParameters, true);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'authentication')) {
+    updates.authentication = mergePreservingDeliverySecrets(endpoint.authentication, updates.authentication);
+  }
+  const candidate = { ...endpoint.toObject({ flattenMaps: true }), ...updates, integration: endpoint.integration };
+  const company = await DeliveryCompany.findById(req.params.id);
+  if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
+  const others = await DeliveryIntegrationEndpoint.find({ integration: company._id, _id: { $ne: endpoint._id }, isActive: true }).lean();
+  const validation = validateDeliveryIntegrationConfiguration(company, [...others, candidate]);
+  if (candidate.isActive !== false && validation.errors.some(issue => issue.includes(`Endpoint ${candidate.name}:`))) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Endpoint configuration is invalid', issues: validation.errors });
+  }
+  Object.assign(endpoint, updates);
+  await endpoint.save({ validateModifiedOnly: true });
+  res.json(safeEndpointResponse(endpoint));
+};
+
+export const deleteCompanyEndpoint = async (req, res) => {
+  const endpoint = await DeliveryIntegrationEndpoint.findOne({ _id: req.params.endpointId, integration: req.params.id });
+  if (!endpoint) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery endpoint not found' });
+  const logCount = await DeliveryIntegrationLog.countDocuments({ endpoint: endpoint._id });
+  if (logCount) {
+    return res.status(StatusCodes.CONFLICT).json({
+      message: 'This endpoint has integration logs. Disable it instead of deleting it.',
+      logCount,
+    });
+  }
+  await endpoint.deleteOne();
+  res.json({ success: true, message: 'Delivery endpoint deleted' });
+};
+
+export const testConfiguredEndpoint = async (req, res) => {
+  const { endpointId, sampleData = {}, execute = false } = req.body || {};
+  if (!endpointId) return res.status(StatusCodes.BAD_REQUEST).json({ message: 'endpointId is required' });
+  const result = await testConfiguredDeliveryEndpoint({
+    integration: req.params.id,
+    endpoint: endpointId,
+    sampleData,
+    execute: execute === true,
+  });
+  res.status(result.success ? StatusCodes.OK : StatusCodes.BAD_REQUEST).json(result);
 };
 
 // Create company
 export const createCompany = async (req, res) => {
   const company = new DeliveryCompany(req.body);
+  const issues = await getGenericActivationIssues(company);
+  if (issues.length) {
+    return res.status(StatusCodes.BAD_REQUEST).json({
+      message: 'Delivery integration configuration is incomplete',
+      issues,
+    });
+  }
   await company.save();
-  res.status(StatusCodes.CREATED).json(company);
+  res.status(StatusCodes.CREATED).json(sanitizeDeliveryCompany(company));
 };
 
 // Update company
 export const updateCompany = async (req, res) => {
   const body = { ...req.body };
+  if (Object.prototype.hasOwnProperty.call(body, 'provider') && !Object.prototype.hasOwnProperty.call(body, 'providerType')) {
+    body.providerType = body.provider;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'baseUrl') && !Object.prototype.hasOwnProperty.call(body, 'apiUrl')) {
+    body.apiUrl = body.baseUrl;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'enabled') && !Object.prototype.hasOwnProperty.call(body, 'isActive')) {
+    body.isActive = body.enabled;
+  }
+  delete body.provider;
+  delete body.baseUrl;
+  delete body.enabled;
   // If statusMapping present, sanitize invalid rows before update
   if (Array.isArray(body.statusMapping)) {
     body.statusMapping = body.statusMapping.filter(m =>
@@ -40,13 +183,33 @@ export const updateCompany = async (req, res) => {
       typeof m.internalStatus === 'string' && m.internalStatus.trim() !== ''
     );
   }
+  const current = await DeliveryCompany.findById(req.params.id);
+  if (!current) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
+  if (Object.prototype.hasOwnProperty.call(body, 'credentials')) {
+    body.credentials = mergePreservingDeliverySecrets(current.credentials, body.credentials, true);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'apiConfiguration')) {
+    body.apiConfiguration = mergePreservingDeliverySecrets(current.apiConfiguration, body.apiConfiguration);
+  }
+  const candidate = {
+    ...current.toObject({ virtuals: true }),
+    ...body,
+    apiConfiguration: body.apiConfiguration || current.apiConfiguration,
+  };
+  const issues = await getGenericActivationIssues(candidate);
+  if (issues.length) {
+    return res.status(StatusCodes.BAD_REQUEST).json({
+      message: 'Delivery integration configuration is incomplete',
+      issues,
+    });
+  }
   const company = await DeliveryCompany.findByIdAndUpdate(
     req.params.id,
     body,
     { new: true, runValidators: true }
   );
   if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
-  res.json(company);
+  res.json(sanitizeDeliveryCompany(company));
 };
 
 // Delete company
@@ -106,6 +269,13 @@ export const validateCompanyConfig = async (req, res) => {
 
   const obj = company.toObject();
   const cfg = validateCompanyConfiguration(obj);
+  const genericValidation = obj.apiConfiguration?.integration?.executionMode === 'generic' ||
+    obj.apiConfiguration?.integration?.engineEnabled === true
+    ? validateDeliveryIntegrationConfiguration(
+        obj,
+        await DeliveryIntegrationEndpoint.find({ integration: company._id, isActive: true }).lean()
+      )
+    : { valid: true, errors: [] };
 
   const params = obj.apiConfiguration?.params || {};
   const query = obj.apiConfiguration?.queryParams || {};
@@ -133,12 +303,12 @@ export const validateCompanyConfig = async (req, res) => {
   const requiredParams = obj.apiConfiguration?.requiredParams || [];
 
   res.json({
-    success: cfg.ok,
-    issues: cfg.issues,
+    success: cfg.ok && genericValidation.valid,
+    issues: [...cfg.issues, ...genericValidation.errors],
     mode: cfg.mode,
     url: cfg.url,
     db: { effectiveDb: effectiveDb ?? null, sources },
-    details: { authMethod, format, requiredParams }
+    details: { authMethod, format, requiredParams, generic: genericValidation }
   });
 };
 
@@ -267,7 +437,7 @@ export const sendOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    res.json({
+    res.json(sanitizeDeliverySecrets({
       message: 'Order sent to delivery company',
       data: {
         trackingNumber,
@@ -277,7 +447,7 @@ export const sendOrder = async (req, res) => {
         resendAttempts: 0,
         deliveryCompanyResponse: order.deliveryResponse
       }
-    });
+    }));
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
     // Return actionable errors for preflight problems
@@ -313,7 +483,7 @@ export const getDeliveryStatus = async (req, res) => {
   if (!order.deliveryCompany) return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Order not assigned to delivery' });
   const status = await getDeliveryStatusFromCompany(order, order.deliveryCompany);
   const internal = mapStatus(order.deliveryCompany, status.status);
-  res.json({ success: true, ...status, status: internal, internalStatus: internal });
+  res.json(sanitizeDeliverySecrets({ success: true, ...status, status: internal, internalStatus: internal }));
 };
 
 // Batch assign multiple orders to a delivery company (no external send, just assignment + optional tracking/status)
