@@ -378,8 +378,9 @@ async function acquireAccessToken(integration, authConfiguration, variables, opt
   } catch (error) {
     const status = error.response?.status;
     const detail = status ? `HTTP ${status}` : (error.code || 'no response');
-    console.error('[delivery/auth] login request failed:', detail);
-    throw new Error(`Authentication request failed (${detail})`);
+    const loginTarget = `${authConfiguration.tokenMethod || 'POST'} ${preparedUrl.url.origin}${preparedUrl.url.pathname}`;
+    console.error('[delivery/auth] login request failed:', detail, loginTarget);
+    throw new Error(`Authentication request failed (${detail}) at ${loginTarget}`);
   }
 
   const tokenPath = authConfiguration.tokenResponsePath || 'token';
