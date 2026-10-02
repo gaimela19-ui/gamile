@@ -15,7 +15,7 @@ const DATA_DIR = path.resolve(__dirname, '../data');
 const DATA_FILE = path.join(DATA_DIR, 'pageLayout.json');
 
 function ensureDataDir() {
-  try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 function readLayoutFromFile() {
@@ -31,11 +31,9 @@ function readLayoutFromFile() {
 }
 
 function writeLayoutToFile({ sections, sectionGap }) {
-  try {
-    ensureDataDir();
-    const payload = { sections: Array.isArray(sections) ? sections : [], sectionGap: typeof sectionGap === 'number' ? sectionGap : 6, updatedAt: new Date().toISOString() };
-    fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
-  } catch {}
+  ensureDataDir();
+  const payload = { sections: Array.isArray(sections) ? sections : [], sectionGap: typeof sectionGap === 'number' ? sectionGap : 6, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
 }
 
 // Get current layout sections
@@ -43,6 +41,9 @@ router.get('/', async (req, res) => {
   try {
     // If DB isn't connected, short-circuit to file fallback to avoid 10s buffering timeout
     if (mongoose.connection.readyState !== 1) {
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ message: 'Layout storage is temporarily unavailable. Please retry.' });
+      }
       const fileLayout = readLayoutFromFile();
       if (fileLayout) return res.json(fileLayout);
       // default empty state
@@ -52,9 +53,12 @@ router.get('/', async (req, res) => {
     const doc = await PageLayout.getOrCreate();
     const payload = { sections: doc.sections, sectionGap: doc.sectionGap };
     // Mirror to file as redundancy
-    writeLayoutToFile(payload);
+    try { writeLayoutToFile(payload); } catch {}
     res.json(payload);
   } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ message: 'Layout storage is temporarily unavailable. Please retry.' });
+    }
     // On DB error, fallback to file
     const fileLayout = readLayoutFromFile();
     if (fileLayout) return res.json(fileLayout);
@@ -70,7 +74,7 @@ function dynamicUpdateGuard(req, res, next) {
   if (mongoose.connection.readyState !== 1) {
     // In production, still enforce admin auth even if DB is down
     if (process.env.NODE_ENV === 'production') {
-      return adminAuth(req, res, next);
+      return res.status(503).json({ message: 'Layout was not saved. Database storage is unavailable; please retry.' });
     }
     // Dev fallback: allow update to avoid data loss and enable file-based persistence
     return next();
@@ -110,7 +114,7 @@ router.put('/', dynamicUpdateGuard, async (req, res) => {
 
     const payload = { sections: doc.sections, sectionGap: doc.sectionGap };
     // Mirror saved layout to file as redundancy
-    writeLayoutToFile(payload);
+    try { writeLayoutToFile(payload); } catch {}
 
     try {
       const broadcast = req.app.get('broadcastToClients');
@@ -121,6 +125,9 @@ router.put('/', dynamicUpdateGuard, async (req, res) => {
 
     res.json(payload);
   } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ message: 'Layout was not saved. Database storage is unavailable; please retry.' });
+    }
     // On error (e.g., DB timeout), still attempt to save to file to avoid data loss
     try {
       const { sections, sectionGap } = req.body || {};
