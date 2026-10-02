@@ -64,7 +64,7 @@ function findCityMapping(cityMappings, address) {
   const rows = Array.isArray(cityMappings) ? cityMappings.map(toPlain) : [];
   for (const candidate of [address.area, address.city, address.state].map(normalize).filter(Boolean)) {
     const row = rows.find(item => normalize(item?.storeCity) === candidate);
-    if (row) return row;
+    if (row) return { ...row, companyCityId: /^\d+$/.test(String(row.companyCityId).trim()) ? Number(row.companyCityId) : row.companyCityId };
   }
   return undefined;
 }
