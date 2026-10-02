@@ -15,6 +15,7 @@
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "server": "node index.js",
+    "migrate:delivery-integrations": "node server/scripts/migrations/2026-10-02-expand-delivery-integrations.mjs",
     "start": "node server/index.js",
     "deploy:manual": "npm run build && netlify deploy --prod --dir=dist",
     "gen:vapid": "node server/scripts/genVapid.js",

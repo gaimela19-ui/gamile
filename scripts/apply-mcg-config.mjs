@@ -28,7 +28,7 @@ async function main() {
     scope: 'api://bb08b4ea-002a -4618-9696-a9a1c7cba5c8/. default',
     accessKey: '638a0dff26ba453692769ac3fc8a59 7e',
     retailerKey: 'dbf94772-fc00-48a0-8f21-87f29c8e3861',
-    retailerClientId: 'My Pet',
+    retailerClientId: 'gaimela',
     // vendorCode is unknown from the provided data; leaving empty so user can fill later
     vendorCode: ''
   };
