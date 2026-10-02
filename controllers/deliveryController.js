@@ -458,6 +458,18 @@ export const sendOrder = async (req, res) => {
         ...(error.details ? { details: error.details } : {})
       });
     }
+    if (error?.code === 'DELIVERY_API_REQUEST_FAILED') {
+      const failure = error.details || {};
+      const dispatched = failure.requestDispatched === true;
+      return res.status(dispatched ? StatusCodes.BAD_GATEWAY : StatusCodes.BAD_REQUEST).json({
+        message: error.message || 'Delivery API request failed',
+        code: error.code,
+        httpStatus: failure.httpStatus || null,
+        requestId: failure.requestId || null,
+        endpoint: failure.endpoint?.name || null,
+        requestDispatched: dispatched,
+      });
+    }
     res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: error.message || 'Failed to send order' });
   } finally {
     await session.endSession();
