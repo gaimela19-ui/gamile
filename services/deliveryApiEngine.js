@@ -69,7 +69,7 @@ function findCityMapping(cityMappings, address) {
   return undefined;
 }
 
-function makeOrderVariables(orderValue, extra = {}, authCredentials = {}, cityMappings = []) {
+function makeOrderVariables(orderValue, extra = {}, authCredentials = {}, cityMappings) {
   const order = toPlain(orderValue) || {};
   const customer = order.customerInfo || {};
   const address = order.shippingAddress || {};
@@ -88,7 +88,8 @@ function makeOrderVariables(orderValue, extra = {}, authCredentials = {}, cityMa
       customer_mobile: customer.mobile || customer.phone || '',
       customer_address: addressParts.join(', '),
       customer_area: address.area || address.city || address.state || '',
-      customer_area_id: findCityMapping(cityMappings, address)?.companyCityId,
+      // Without mappings (template validation) use a placeholder so the template can be saved.
+      customer_area_id: cityMappings === undefined ? 0 : findCityMapping(cityMappings, address)?.companyCityId,
       money_collection_cost: moneyCollectionCost,
       shipping_cost: shippingCost,
       note: order.deliveryNotes || order.note || order.notes || '',
@@ -595,7 +596,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
     const selectedAuthentication = endpoint.authentication && endpoint.authentication.type !== 'inherit'
       ? endpoint.authentication
       : configuredAuthentication;
-    const variables = makeOrderVariables(args.order || {}, args.extra || {}, selectedAuthentication.credentials || {}, integration.cityMappings);
+    const variables = makeOrderVariables(args.order || {}, args.extra || {}, selectedAuthentication.credentials || {}, integration.cityMappings || []);
     const resolvedPath = endpointUrl(integration, endpoint, variables);
     const urlCheck = await validateAndPinUrl(resolvedPath, options.allowPrivateNetwork === true);
     const url = urlCheck.url;
