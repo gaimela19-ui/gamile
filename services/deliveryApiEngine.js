@@ -375,8 +375,11 @@ async function acquireAccessToken(integration, authConfiguration, variables, opt
       httpsAgent: preparedUrl.httpsAgent,
       validateStatus: status => status >= 200 && status < 300,
     });
-  } catch {
-    throw new Error('Authentication request failed');
+  } catch (error) {
+    const status = error.response?.status;
+    const detail = status ? `HTTP ${status}` : (error.code || 'no response');
+    console.error('[delivery/auth] login request failed:', detail);
+    throw new Error(`Authentication request failed (${detail})`);
   }
 
   const tokenPath = authConfiguration.tokenResponsePath || 'token';
