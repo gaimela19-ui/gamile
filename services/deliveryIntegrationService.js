@@ -151,6 +151,8 @@ const COMMON_STATUS_MAP = {
   canceled: 'cancelled'
 };
 import axios from 'axios';
+import { executeDeliveryEndpoint } from './deliveryApiEngine.js';
+import { executeRegisteredDeliveryAdapter, getRegisteredDeliveryAdapter } from './deliveryProviderAdapterRegistry.js';
 
 function buildAuth({ apiConfiguration = {}, credentials = {} }) {
   const method = apiConfiguration.authMethod || 'none';
@@ -363,7 +365,7 @@ async function sendRest(order, company, payload) {
   const headers = { 'Content-Type': 'application/json', ...extraHeaders };
   // Merge static params and query params
   const globalParams = getGlobalDefaultParams();
-  const envDb = process.env.DELIVERY_HUB_DB || process.env.ODOO_DB || process.env.DELIVERY_DB;
+  const envDb = process.env.DELIVERY_HUB_DB || process.env.DELIVERY_DB;
   const baseParams = { ...(globalParams || {}), ...(company.apiConfiguration?.params || {}) };
   if (envDb && baseParams.db == null) baseParams.db = envDb;
   // Fallback: accept db from stored credentials/customFields if not present in params
@@ -372,9 +374,8 @@ async function sendRest(order, company, payload) {
   const mergedPayload = { ...baseParams, ...payload };
   const globalQuery = getGlobalDefaultQuery();
   const baseQuery = { ...(globalQuery || {}), ...(company.apiConfiguration?.queryParams || {}) };
-  // Some providers (e.g., Odoo/Olivery) read only http.request.params, not JSON body.
-  // Ensure `db` is present in the query string if detected/required.
-  const requireDbInQuery = process.env.DELIVERY_REQUIRE_DB === 'true' || /olivery|odoo/i.test(String(url));
+  // Compatibility adapters can require parameters in the URL query string.
+  const requireDbInQuery = process.env.DELIVERY_REQUIRE_DB === 'true' || company.apiConfiguration?.requireDbInQuery === true;
   if (requireDbInQuery && baseQuery.db == null && baseParams.db != null) baseQuery.db = baseParams.db;
   if (envDb && baseQuery.db == null && baseParams.db == null) baseQuery.db = envDb;
   const effectiveQuery = baseQuery;
@@ -394,7 +395,7 @@ async function sendRest(order, company, payload) {
     const dbgStr = typeof dbg === 'string' ? dbg : JSON.stringify(dbg || {});
     const missingDb = /KeyError: 'db'/.test(String(dbgStr)) || /\bdb\b/.test(String(err.message || ''));
     if (missingDb) {
-      err.message = `${err.message} - missing 'db' param. Configure company.apiConfiguration.params.db or set DELIVERY_HUB_DB / ODOO_DB / DELIVERY_DB or DELIVERY_DEFAULT_PARAMS={"db":"..."}`;
+      err.message = `${err.message} - missing 'db' param. Configure company.apiConfiguration.params.db or set DELIVERY_HUB_DB / DELIVERY_DB or DELIVERY_DEFAULT_PARAMS={"db":"..."}`;
     }
     debugLog('REST delivery request failed', {
       code: err.code,
@@ -430,14 +431,13 @@ async function sendJsonRpc(order, company, payload) {
   if (!url) throw new Error('Delivery company is missing API URL');
   const omit = company.apiConfiguration?.jsonrpcOmitMethod === true || company.apiConfiguration?.omitJsonRpcMethod === true;
   const globalParams = getGlobalDefaultParams();
-  const envDb = process.env.DELIVERY_HUB_DB || process.env.ODOO_DB || process.env.DELIVERY_DB;
+  const envDb = process.env.DELIVERY_HUB_DB || process.env.DELIVERY_DB;
   const baseParams = { ...(globalParams || {}), ...(company.apiConfiguration?.params || {}) };
   if (envDb && baseParams.db == null) baseParams.db = envDb;
   // Fallback: accept db from stored credentials/customFields if not present in params
   const credDb = company.credentials?.database || company.credentials?.db || company.customFields?.db;
   if (baseParams.db == null && credDb) baseParams.db = credDb;
-  // Some Odoo-like providers expect credentials in JSON-RPC params (not only headers)
-  const includeCreds = process.env.DELIVERY_INCLUDE_CREDS === 'true' || /olivery|odoo/i.test(String(url)) || company.apiConfiguration?.credentialsInParams === true;
+  const includeCreds = process.env.DELIVERY_INCLUDE_CREDS === 'true' || company.apiConfiguration?.credentialsInParams === true;
   const username = company.apiConfiguration?.username || company.credentials?.username || company.credentials?.login;
   const password = company.apiConfiguration?.password || company.credentials?.password;
   const credParams = includeCreds ? { password, username, login: username } : {};
@@ -471,7 +471,7 @@ async function sendJsonRpc(order, company, payload) {
     const dbgStr = typeof dbg === 'string' ? dbg : JSON.stringify(dbg || {});
     const missingDb = /KeyError: 'db'/.test(String(dbgStr)) || /\bdb\b/.test(String(err.message || ''));
     if (missingDb) {
-      err.message = `${err.message} - missing 'db' param. Configure company.apiConfiguration.params.db or set DELIVERY_HUB_DB / ODOO_DB / DELIVERY_DB or DELIVERY_DEFAULT_PARAMS={"db":"..."}`;
+      err.message = `${err.message} - missing 'db' param. Configure company.apiConfiguration.params.db or set DELIVERY_HUB_DB / DELIVERY_DB or DELIVERY_DEFAULT_PARAMS={"db":"..."}`;
     }
     debugLog('JSON-RPC delivery request failed', {
       code: err.code,
@@ -550,28 +550,28 @@ export async function sendToCompany(order, company, extra = {}) {
   const effectiveCompany = hubCfg
     ? { ...company, apiConfiguration: { ...(company.apiConfiguration || {}), ...hubCfg } }
     : company;
+  const registeredAdapter = getRegisteredDeliveryAdapter(effectiveCompany);
+  const legacyCompany = registeredAdapter?.prepareLegacyCompany(effectiveCompany) || effectiveCompany;
   const globalParams = getGlobalDefaultParams();
-  const envDb = process.env.DELIVERY_HUB_DB || process.env.ODOO_DB || process.env.DELIVERY_DB;
-  const baseParams = { ...(globalParams || {}), ...(effectiveCompany.apiConfiguration?.params || {}) };
+  const envDb = process.env.DELIVERY_HUB_DB || process.env.DELIVERY_DB;
+  const baseParams = { ...(globalParams || {}), ...(legacyCompany.apiConfiguration?.params || {}) };
   if (envDb && baseParams.db == null) baseParams.db = envDb;
   // Fallback: accept db from stored credentials/customFields if not present in params
-  const credDb = effectiveCompany.credentials?.database || effectiveCompany.credentials?.db || effectiveCompany.customFields?.db;
+  const credDb = legacyCompany.credentials?.database || legacyCompany.credentials?.db || legacyCompany.customFields?.db;
   if (baseParams.db == null && credDb) baseParams.db = credDb;
   const mergedBodyParams = { ...baseParams, ...payload };
   const globalQuery = getGlobalDefaultQuery();
-  const baseQuery = { ...(globalQuery || {}), ...(effectiveCompany.apiConfiguration?.queryParams || {}) };
+  const baseQuery = { ...(globalQuery || {}), ...(legacyCompany.apiConfiguration?.queryParams || {}) };
   if (envDb && baseQuery.db == null && baseParams.db == null) baseQuery.db = envDb;
 
   const requiredParams = new Set(
-    Array.isArray(effectiveCompany.apiConfiguration?.requiredParams)
-      ? effectiveCompany.apiConfiguration.requiredParams
+    Array.isArray(legacyCompany.apiConfiguration?.requiredParams)
+      ? legacyCompany.apiConfiguration.requiredParams
       : []
   );
-  // Heuristic: Odoo/Olivery endpoints require db; allow opt-in via DELIVERY_REQUIRE_DB=true
-  const requireDb = process.env.DELIVERY_REQUIRE_DB === 'true' || /olivery|odoo/i.test(String(url));
+  const requireDb = process.env.DELIVERY_REQUIRE_DB === 'true' || legacyCompany.apiConfiguration?.requireDbInQuery === true;
   if (requireDb) requiredParams.add('db');
-  // Heuristic: these endpoints may also require credentials in params
-  const includeCreds = process.env.DELIVERY_INCLUDE_CREDS === 'true' || /olivery|odoo/i.test(String(url)) || effectiveCompany.apiConfiguration?.credentialsInParams === true;
+  const includeCreds = process.env.DELIVERY_INCLUDE_CREDS === 'true' || legacyCompany.apiConfiguration?.credentialsInParams === true;
   if (includeCreds) {
     requiredParams.add('password');
     requiredParams.add('username');
@@ -580,9 +580,9 @@ export async function sendToCompany(order, company, extra = {}) {
   for (const k of requiredParams) {
     const present = (mergedBodyParams[k] !== undefined && mergedBodyParams[k] !== null && String(mergedBodyParams[k]) !== '')
       || (baseQuery[k] !== undefined && baseQuery[k] !== null && String(baseQuery[k]) !== '')
-      || (k === 'db' && !!(effectiveCompany.credentials?.database || effectiveCompany.credentials?.db || effectiveCompany.customFields?.db))
-      || (k === 'password' && !!(effectiveCompany.apiConfiguration?.password || effectiveCompany.credentials?.password))
-      || (k === 'username' && !!(effectiveCompany.apiConfiguration?.username || effectiveCompany.credentials?.username || effectiveCompany.credentials?.login));
+      || (k === 'db' && !!(legacyCompany.credentials?.database || legacyCompany.credentials?.db || legacyCompany.customFields?.db))
+      || (k === 'password' && !!(legacyCompany.apiConfiguration?.password || legacyCompany.credentials?.password))
+      || (k === 'username' && !!(legacyCompany.apiConfiguration?.username || legacyCompany.credentials?.username || legacyCompany.credentials?.login));
     if (!present) missingParams.push(k);
   }
   if (missingParams.length) {
@@ -593,38 +593,87 @@ export async function sendToCompany(order, company, extra = {}) {
     throw err;
   }
 
+  const integrationConfig = effectiveCompany.apiConfiguration?.integration || {};
+  const adapterExecutionMode = registeredAdapter?.getExecutionMode(effectiveCompany);
+  const useGenericEngine = adapterExecutionMode
+    ? adapterExecutionMode === 'generic'
+    : integrationConfig.executionMode === 'generic' || integrationConfig.engineEnabled === true;
+
+  if (useGenericEngine) {
+    const engineOptions = extra.engineOptions || {};
+    const registeredResult = await executeRegisteredDeliveryAdapter({
+      order,
+      company: effectiveCompany,
+      payload,
+      extra,
+      options: engineOptions,
+    });
+    const result = registeredResult || await executeDeliveryEndpoint({
+      integration: effectiveCompany,
+      endpoint: integrationConfig.sendEndpointName || 'createShipment',
+      order,
+      extra,
+    }, engineOptions);
+
+    if (!result.success) {
+      const allowPreDispatchFallback = registeredAdapter?.canFallbackToLegacy(effectiveCompany, result) === true;
+      if (allowPreDispatchFallback && result.error?.requestDispatched === false) {
+        debugLog('Generic delivery adapter failed before dispatch; using legacy rollback path', {
+          endpoint: result.error?.endpoint?.name,
+          message: result.error?.message,
+        });
+      } else {
+        const error = new Error(result.error?.message || 'Delivery API request failed');
+        error.code = 'DELIVERY_API_REQUEST_FAILED';
+        error.details = result.error;
+        error.response = result.error?.httpStatus
+          ? { status: result.error.httpStatus, data: result.error.providerResponse }
+          : undefined;
+        throw error;
+      }
+    } else {
+      return {
+        trackingNumber: result.trackingNumber,
+        providerResponse: result.rawResponse,
+        providerStatus: result.status,
+        shipmentId: result.shipmentId,
+        externalId: result.externalId,
+      };
+    }
+  }
+
   if (format === 'jsonrpc' || hubCfg?.format === 'jsonrpc') {
     // If using hub, temporarily project hub auth into company for call
     if (hubCfg) {
       const enriched = {
-        ...company,
+        ...legacyCompany,
         apiConfiguration: {
-          ...(company.apiConfiguration || {}),
+          ...(legacyCompany.apiConfiguration || {}),
           ...hubCfg,
         }
       };
       return sendJsonRpc(order, enriched, payload);
     }
-    return sendJsonRpc(order, company, payload);
+    return sendJsonRpc(order, legacyCompany, payload);
   }
   // REST path with auto-detect fallback to JSON-RPC if provider indicates it
   try {
     if (hubCfg) {
       const enriched = {
-        ...company,
+        ...legacyCompany,
         apiConfiguration: {
-          ...(company.apiConfiguration || {}),
+          ...(legacyCompany.apiConfiguration || {}),
           ...hubCfg,
         }
       };
       return await sendRest(order, enriched, payload);
     }
-    return await sendRest(order, company, payload);
+    return await sendRest(order, legacyCompany, payload);
   } catch (err) {
     const data = err?.response?.data;
     const looksJsonRpc = (data && typeof data === 'object' && (data.jsonrpc || data.error))
       || /jsonrpc/i.test(String(err.message))
-      || /odoo/i.test(String(err.message))
+      || legacyCompany.apiConfiguration?.legacyJsonRpcAutoDetect === true
       || /KeyError: 'db'/i.test(String(data?.error?.debug || ''));
     if (looksJsonRpc) {
       debugLog('REST send hinted JSON-RPC provider; retrying as JSON-RPC once');
