@@ -157,3 +157,31 @@ test('test endpoint executes only when explicitly requested and marked safe', as
     assert.doesNotMatch(JSON.stringify(result), /validation-token/);
   });
 });
+
+test('validates generic login-token authentication and protected body variables', async () => {
+  await withServer((_request, response) => response.end('{}'), async baseUrl => {
+    const integration = validIntegration(baseUrl);
+    integration.apiConfiguration.integration.authentication = {
+      type: 'oauth2',
+      tokenUrl: `${baseUrl}/login`,
+      tokenMethod: 'POST',
+      tokenRequest: { phone: '{{auth.phone}}', password: '{{auth.password}}' },
+      tokenResponsePath: 'data.token',
+      credentials: { phone: 'sample-phone', password: 'sample-password' },
+    };
+    const result = validateDeliveryIntegrationConfiguration(integration, [{
+      name: 'createOrder',
+      method: 'POST',
+      path: '/orders',
+      requiresRequestBody: true,
+      requestBody: {
+        username: '{{auth.phone}}',
+        password: '{{auth.password}}',
+        reference_id: '{{order.sequence}}',
+      },
+    }]);
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+});

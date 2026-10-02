@@ -21,6 +21,9 @@ export const DELIVERY_TEMPLATE_VARIABLES = [
   'order.note',
   'order.product_note',
   'order.items',
+  'auth.phone',
+  'auth.username',
+  'auth.password',
 ];
 
 function plain(value) {
@@ -66,6 +69,15 @@ function configuredAuth(integration, endpoint) {
     const username = credentials.username || credentials.login || apiConfiguration.username || storedCredentials.username || storedCredentials.login;
     const password = credentials.password || apiConfiguration.password || storedCredentials.password;
     return username && password ? null : 'Basic authentication requires a username and password';
+  }
+  if (type === 'oauth2') {
+    if (!authentication.tokenUrl || !validateEndpointUrl(authentication.tokenUrl)) return 'Login token URL must be a valid HTTP or HTTPS URL';
+    if (!hasValue(authentication.tokenRequest)) return 'Login request body/template is required';
+    try { renderTemplate(authentication.tokenRequest, makeOrderVariables({}, {}, credentials)); }
+    catch (error) { return `Login request template is invalid: ${error.message}`; }
+    if (!authentication.tokenResponsePath) return 'Token response path is required';
+    const hasCredentials = hasValue(credentials);
+    return hasCredentials ? null : 'Token authentication requires protected login credentials';
   }
   if (type === 'custom') {
     const headers = plain(authentication.headers);

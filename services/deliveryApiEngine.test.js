@@ -480,3 +480,107 @@ test('dry-run builds and sanitizes a request without calling the endpoint', asyn
     assert.doesNotMatch(JSON.stringify(result), /preview-token/);
   });
 });
+
+test('token authentication logs in once, caches the token, and injects protected auth variables', async () => {
+  let loginHits = 0;
+  let orderHits = 0;
+  let loginBody;
+  const orderRequests = [];
+  await withHttpServer(async (request, response) => {
+    loginHits += 1;
+    loginBody = await readJsonRequest(request);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ data: { token: 'mock-access-token', expires_in: 120 } }));
+  }, async loginBaseUrl => {
+    await withHttpServer(async (request, response) => {
+      orderHits += 1;
+      orderRequests.push({ authorization: request.headers.authorization, body: await readJsonRequest(request) });
+      response.writeHead(201, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: { id: 'shipment-auth-1', tracking: 'track-auth-1', status: 'PENDING' } }));
+    }, async orderBaseUrl => {
+      const auth = {
+        type: 'oauth2',
+        tokenUrl: `${loginBaseUrl}/login`,
+        tokenMethod: 'POST',
+        tokenRequest: { phone: '{{auth.phone}}', password: '{{auth.password}}' },
+        tokenResponsePath: 'data.token',
+        tokenExpiresInPath: 'data.expires_in',
+        scheme: 'Bearer',
+        credentials: { phone: 'test-phone', password: 'test-password' },
+      };
+      const integrationValue = integration(orderBaseUrl, {
+        _id: 'token-cache-integration-auth-flow',
+        apiConfiguration: { integration: { authentication: auth } },
+      });
+      const endpoint = {
+        name: 'createShipment',
+        method: 'POST',
+        path: '/orders',
+        requestBody: {
+          username: '{{auth.phone}}',
+          password: '{{auth.password}}',
+          reference_id: '{{order.sequence}}',
+        },
+        responseMapping: { trackingNumber: 'data.tracking', status: 'data.status' },
+      };
+      const logs = [];
+      const LogModel = { create: async entry => logs.push(entry) };
+
+      const first = await executeDeliveryEndpoint({ integration: integrationValue, endpoint, order: order() }, { ...quietOptions({ logModel: LogModel }) });
+      const second = await executeDeliveryEndpoint({ integration: integrationValue, endpoint, order: order() }, { ...quietOptions({ logModel: LogModel }) });
+
+      assert.deepEqual(loginBody, { phone: 'test-phone', password: 'test-password' });
+      assert.equal(loginHits, 1);
+      assert.equal(orderHits, 2);
+      assert.equal(orderRequests[0].authorization, 'Bearer mock-access-token');
+      assert.equal(orderRequests[0].body.username, 'test-phone');
+      assert.equal(orderRequests[0].body.password, 'test-password');
+      assert.equal(orderRequests[0].body.reference_id, 'ORD-204');
+      assert.equal(first.trackingNumber, 'track-auth-1');
+      assert.equal(second.trackingNumber, 'track-auth-1');
+      assert.doesNotMatch(JSON.stringify(logs), /test-password|mock-access-token/);
+      assert.doesNotMatch(JSON.stringify(first), /test-password|mock-access-token/);
+    });
+  });
+});
+
+test('token-auth dry run renders credential placeholders but skips both HTTP requests', async () => {
+  let loginHits = 0;
+  let orderHits = 0;
+  await withHttpServer(async (_request, response) => {
+    loginHits += 1;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ token: 'must-not-be-fetched' }));
+  }, async loginBaseUrl => {
+    await withHttpServer(async (_request, response) => {
+      orderHits += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end('{}');
+    }, async orderBaseUrl => {
+      const result = await executeDeliveryEndpoint({
+        integration: integration(orderBaseUrl, {
+          _id: 'token-dry-run-integration-auth-flow',
+          apiConfiguration: {
+            integration: {
+              authentication: {
+                type: 'oauth2',
+                tokenUrl: `${loginBaseUrl}/login`,
+                tokenRequest: { phone: '{{auth.phone}}', password: '{{auth.password}}' },
+                tokenResponsePath: 'token',
+                credentials: { phone: 'dry-run-phone', password: 'dry-run-password' },
+              },
+            },
+          },
+        }),
+        endpoint: { name: 'preview', method: 'POST', path: '/orders', requestBody: { password: '{{auth.password}}' } },
+        order: order(),
+      }, quietOptions({ dryRun: true }));
+
+      assert.equal(loginHits, 0);
+      assert.equal(orderHits, 0);
+      assert.equal(result.executed, false);
+      assert.equal('password' in result.request.body, false);
+      assert.doesNotMatch(JSON.stringify(result), /dry-run-password|must-not-be-fetched/);
+    });
+  });
+});

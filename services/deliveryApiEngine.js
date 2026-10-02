@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -30,6 +31,9 @@ const ALLOWED_TEMPLATE_VARIABLES = new Set([
   'order.note',
   'order.product_note',
   'order.items',
+  'auth.phone',
+  'auth.username',
+  'auth.password',
 ]);
 const ALLOWED_TRANSFORMS = new Set(['upper', 'lower', 'trim', 'digits', 'string', 'number', 'json']);
 const SENSITIVE_KEY = /(credential|password|secret|token|api[-_]?key|authorization|bearer|username|login|signature)/i;
@@ -54,7 +58,7 @@ function hasConfiguredValue(value) {
   return true;
 }
 
-function makeOrderVariables(orderValue, extra = {}) {
+function makeOrderVariables(orderValue, extra = {}, authCredentials = {}) {
   const order = toPlain(orderValue) || {};
   const customer = order.customerInfo || {};
   const address = order.shippingAddress || {};
@@ -78,6 +82,11 @@ function makeOrderVariables(orderValue, extra = {}) {
       note: order.deliveryNotes || order.note || order.notes || '',
       product_note: productNote,
       items,
+    },
+    auth: {
+      phone: authCredentials.phone || authCredentials.username || authCredentials.login || '',
+      username: authCredentials.username || authCredentials.login || authCredentials.phone || '',
+      password: authCredentials.password || '',
     },
   };
 }
@@ -313,7 +322,78 @@ function sanitizeAndRedact(value, secrets) {
   return safe;
 }
 
-function applyAuthentication(integration, endpointAuthentication, headers, queryParameters, variables) {
+const accessTokenCache = new Map();
+
+function resolveTokenUrl(integration, authConfiguration) {
+  const tokenUrl = String(authConfiguration.tokenUrl || '').trim();
+  if (!tokenUrl) throw new Error('Token authentication requires a login URL');
+  try {
+    return new URL(tokenUrl).toString();
+  } catch {
+    const baseUrl = integration.apiUrl || integration.apiConfiguration?.baseUrl;
+    if (!baseUrl) throw new Error('Token authentication requires a valid login URL');
+    return new URL(tokenUrl.replace(/^\/+/, ''), `${String(baseUrl).replace(/\/+$/, '')}/`).toString();
+  }
+}
+
+function accessTokenCacheKey(integration, authConfiguration, tokenUrl) {
+  const credentials = authConfiguration.credentials || {};
+  const cacheIdentity = JSON.stringify({
+    integration: String(integration._id || integration.id || integration.code || integration.name || ''),
+    tokenUrl,
+    credentials,
+    tokenRequest: authConfiguration.tokenRequest,
+  });
+  return createHash('sha256').update(cacheIdentity).digest('hex');
+}
+
+async function acquireAccessToken(integration, authConfiguration, variables, options) {
+  const tokenUrl = resolveTokenUrl(integration, authConfiguration);
+  const cacheKey = accessTokenCacheKey(integration, authConfiguration, tokenUrl);
+  const cached = accessTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  const tokenRequest = authConfiguration.tokenRequest;
+  if (!hasConfiguredValue(tokenRequest)) throw new Error('Token authentication requires a login request body');
+  const preparedUrl = await validateAndPinUrl(tokenUrl, options.allowPrivateNetwork === true);
+  const tokenBody = renderTemplate(tokenRequest, variables);
+  const tokenHeaders = renderTemplate(authConfiguration.headers || {}, variables);
+  const hasContentType = Object.keys(tokenHeaders).some(key => key.toLowerCase() === 'content-type');
+  if (!hasContentType) tokenHeaders['Content-Type'] = 'application/json';
+
+  let tokenResponse;
+  try {
+    tokenResponse = await axios.request({
+      method: String(authConfiguration.tokenMethod || 'POST').toUpperCase(),
+      url: preparedUrl.url.toString(),
+      data: tokenBody,
+      headers: tokenHeaders,
+      timeout: Number(authConfiguration.timeoutMs || integration.apiConfiguration?.timeoutMs) || 10000,
+      maxRedirects: 0,
+      proxy: false,
+      httpAgent: preparedUrl.httpAgent,
+      httpsAgent: preparedUrl.httpsAgent,
+      validateStatus: status => status >= 200 && status < 300,
+    });
+  } catch {
+    throw new Error('Authentication request failed');
+  }
+
+  const tokenPath = authConfiguration.tokenResponsePath || 'token';
+  const token = getPath(tokenResponse.data, tokenPath);
+  if (typeof token !== 'string' || !token.trim()) throw new Error('Authentication response did not contain the configured token');
+
+  const configuredTtl = Number(authConfiguration.tokenCacheSeconds) || 300;
+  const responseTtl = authConfiguration.tokenExpiresInPath
+    ? Number(getPath(tokenResponse.data, authConfiguration.tokenExpiresInPath))
+    : NaN;
+  const ttlSeconds = Number.isFinite(responseTtl) && responseTtl > 0 ? responseTtl : configuredTtl;
+  const safeTtl = Math.max(1, Math.min(ttlSeconds, 86400));
+  accessTokenCache.set(cacheKey, { token, expiresAt: Date.now() + safeTtl * 1000 });
+  return token;
+}
+
+async function applyAuthentication(integration, endpointAuthentication, headers, queryParameters, variables, options = {}) {
   const apiConfiguration = integration.apiConfiguration || {};
   const configuredAuthentication = integration.apiConfiguration?.integration?.authentication || {};
   const authConfiguration = endpointAuthentication && endpointAuthentication.type !== 'inherit'
@@ -340,6 +420,14 @@ function applyAuthentication(integration, endpointAuthentication, headers, query
     const password = credentials.password || apiConfiguration.password || integration.credentials?.password;
     if (!username || !password) throw new Error('Basic authentication requires a username and password');
     basicAuth = { username, password };
+  } else if (type === 'oauth2') {
+    const scheme = authConfiguration.scheme || 'Bearer';
+    if (options.dryRun === true) {
+      headers.Authorization = `${scheme} [REDACTED]`;
+    } else {
+      const token = await acquireAccessToken(integration, authConfiguration, variables, options);
+      headers.Authorization = `${scheme} ${token}`;
+    }
   } else if (type === 'custom') {
     Object.assign(headers, renderTemplate(authConfiguration.headers || {}, variables));
     const name = authConfiguration.name;
@@ -479,15 +567,19 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
     collectSecrets(endpoint, false, secrets);
     if (integration.isActive === false || integration.enabled === false) throw new Error('Delivery integration is disabled');
     if (endpoint.isActive === false) throw new Error('Delivery endpoint is disabled');
+    const apiConfiguration = integration.apiConfiguration || {};
+    const configuredIntegration = apiConfiguration.integration || {};
     const method = String(endpoint.method || 'POST').toUpperCase();
     if (!HTTP_METHODS.has(method)) throw new Error(`Unsupported HTTP method: ${method}`);
 
-    const variables = makeOrderVariables(args.order || {}, args.extra || {});
+    const configuredAuthentication = configuredIntegration.authentication || {};
+    const selectedAuthentication = endpoint.authentication && endpoint.authentication.type !== 'inherit'
+      ? endpoint.authentication
+      : configuredAuthentication;
+    const variables = makeOrderVariables(args.order || {}, args.extra || {}, selectedAuthentication.credentials || {});
     const resolvedPath = endpointUrl(integration, endpoint, variables);
     const urlCheck = await validateAndPinUrl(resolvedPath, options.allowPrivateNetwork === true);
     const url = urlCheck.url;
-    const apiConfiguration = integration.apiConfiguration || {};
-    const configuredIntegration = apiConfiguration.integration || {};
     const rawHeaders = {
       ...(apiConfiguration.headers || {}),
       ...(endpoint.headers || {}),
@@ -507,7 +599,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
     const requestBody = bodyTemplate == null
       ? undefined
       : (hasRequestBodyOverride ? bodyTemplate : renderTemplate(bodyTemplate, variables));
-    const basicAuth = applyAuthentication(integration, endpoint.authentication, headers, queryParameters, variables);
+    const basicAuth = await applyAuthentication(integration, endpoint.authentication, headers, queryParameters, variables, options);
     appendQueryParameters(url, queryParameters);
     const timeout = Number(endpoint.timeoutMs || apiConfiguration.timeoutMs || 15000);
     const retry = endpoint.retry || {};
