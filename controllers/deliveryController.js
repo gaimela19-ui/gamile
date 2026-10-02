@@ -184,6 +184,15 @@ export const updateCompany = async (req, res) => {
     );
   }
   const current = await DeliveryCompany.findById(req.params.id);
+  if (Array.isArray(body.cityMappings)) {
+    body.cityMappings = body.cityMappings
+      .filter(row => row && String(row.storeCity ?? '').trim() && row.companyCityId !== undefined && String(row.companyCityId).trim() !== '')
+      .map(row => ({
+        storeCity: String(row.storeCity).trim(),
+        companyCityId: row.companyCityId,
+        companyCityName: String(row.companyCityName ?? '').trim(),
+      }));
+  }
   if (!current) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
   if (Object.prototype.hasOwnProperty.call(body, 'credentials')) {
     body.credentials = mergePreservingDeliverySecrets(current.credentials, body.credentials, true);
