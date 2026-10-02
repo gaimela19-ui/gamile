@@ -399,8 +399,6 @@ export const sendOrder = async (req, res) => {
     if (!order) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Order not found' });
     if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
 
-    await session.startTransaction();
-
   // Validate company API configuration before sending
   const cfg = validateCompanyConfiguration(company.toObject());
   if (!cfg.ok) {
@@ -423,8 +421,28 @@ export const sendOrder = async (req, res) => {
   }
 
   // Build payload and send to provider
-  const { trackingNumber, providerResponse, providerStatus } = await sendToCompany(order.toObject(), company.toObject(), { deliveryFee });
+  // Keep under the platform gateway limit so the client gets a real error instead of a 504
+  const SEND_DEADLINE_MS = Number(process.env.DELIVERY_SEND_DEADLINE_MS) || 25000;
+  let deadlineTimer;
+  const deadline = new Promise((_, reject) => {
+    deadlineTimer = setTimeout(() => {
+      const err = new Error('Delivery provider did not respond in time');
+      err.code = 'DELIVERY_SEND_TIMEOUT';
+      reject(err);
+    }, SEND_DEADLINE_MS);
+  });
+  let sent;
+  try {
+    sent = await Promise.race([
+      sendToCompany(order.toObject(), company.toObject(), { deliveryFee }),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+  const { trackingNumber, providerResponse, providerStatus } = sent;
 
+  await session.startTransaction();
   order.deliveryCompany = company._id;
   order.deliveryStatus = mapStatus(company, providerStatus || 'assigned');
   order.deliveryTrackingNumber = trackingNumber;
@@ -449,7 +467,8 @@ export const sendOrder = async (req, res) => {
       }
     }));
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
+    if (session.inTransaction()) await session.abortTransaction().catch(() => {});
+    console.error('[delivery/send] failed:', error?.code || '', error?.message || error);
     // Return actionable errors for preflight problems
     if (error && (error.code === 'MAPPING_MISSING' || error.code === 'PARAMS_MISSING')) {
       return res.status(StatusCodes.BAD_REQUEST).json({
@@ -457,6 +476,9 @@ export const sendOrder = async (req, res) => {
         code: error.code,
         ...(error.details ? { details: error.details } : {})
       });
+    }
+    if (error?.code === 'DELIVERY_SEND_TIMEOUT') {
+      return res.status(StatusCodes.GATEWAY_TIMEOUT).json({ message: error.message, code: error.code });
     }
     if (error?.code === 'DELIVERY_API_REQUEST_FAILED') {
       const failure = error.details || {};
@@ -472,7 +494,7 @@ export const sendOrder = async (req, res) => {
     }
     res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: error.message || 'Failed to send order' });
   } finally {
-    await session.endSession();
+    await session.endSession().catch(() => {});
   }
 };
 
