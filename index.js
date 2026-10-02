@@ -96,6 +96,15 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 
 const app = express();
+let databaseReady = process.env.SKIP_DB === '1';
+let startupInitialized = process.env.SKIP_DB === '1';
+
+mongoose.connection.on('disconnected', () => {
+  databaseReady = process.env.SKIP_DB === '1';
+});
+mongoose.connection.on('reconnected', () => {
+  databaseReady = startupInitialized;
+});
 
 // Middleware
 // Behind proxies (Render/Netlify/etc.) trust X-Forwarded-* to populate req.ip properly
@@ -237,7 +246,7 @@ const buildZCreditDeepLinkHtml = (params = {}) => {
   const qp = [`status=${encodeURIComponent(status)}`];
   if (session) qp.push(`session=${encodeURIComponent(session)}`);
   if (orderNumber) qp.push(`order=${encodeURIComponent(orderNumber)}`);
-  const deepLink = `mypets://zcredit-return?${qp.join('&')}`;
+  const deepLink = `gaimelas://zcredit-return?${qp.join('&')}`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -286,6 +295,20 @@ app.use('/uploads', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
 }, express.static(path.resolve(__dirname, '../uploads')));
+
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS' || req.path === '/' || req.path === '/health' || req.path === '/ready' || req.path === '/api/realtime/status') {
+    return next();
+  }
+  if (!databaseReady) {
+    res.setHeader('Retry-After', '3');
+    return res.status(503).json({
+      message: 'Service is starting; database initialization is not ready yet.',
+      code: 'DATABASE_NOT_READY',
+    });
+  }
+  return next();
+});
 
 // MongoDB connection handled by dbManager service
 
@@ -351,9 +374,16 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/ready', (req, res) => {
+  if (!databaseReady) {
+    return res.status(503).json({ status: 'starting', database: 'not_ready' });
+  }
+  return res.json({ status: 'ready', database: 'ready', timestamp: new Date().toISOString() });
+});
+
 // Root route for uptime checks and basic service liveness
 app.get('/', (req, res) => {
-  res.status(200).json({ status: 'ok', service: 'mypet-api', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'ok', service: 'gaimela-api', timestamp: new Date().toISOString() });
 });
 
 // Error handling middleware
@@ -575,10 +605,8 @@ app.post('/api/realtime/test-broadcast', (req, res) => {
 const startServer = async () => {
   if (process.env.SKIP_DB === '1') {
     console.warn('Starting server with SKIP_DB=1 (database connection skipped).');
-    server.listen(PORT, () => {
-      console.log(`Server running (no DB) on port ${PORT}`);
-      console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
-    });
+    startupInitialized = true;
+    databaseReady = true;
     return;
   }
 
@@ -590,7 +618,7 @@ const startServer = async () => {
     console.error('Database connection failed after retries:', e.message);
   }
   if (!conn) {
-    console.error('Database connection failed; server not started. Set SKIP_DB=1 to bypass during development.');
+    console.error('Database connection failed; HTTP server remains available but database-backed routes return 503.');
     return;
   }
 
@@ -690,16 +718,24 @@ const startServer = async () => {
     console.warn('[startup] Retention cleanup start failed:', e?.message || e);
   }
 
-  server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
-  });
+  startupInitialized = true;
+  databaseReady = true;
+  console.log('[startup] Database initialization complete; app is ready.');
   try { startPushScheduler(app); console.log('[startup] Push scheduler started'); } catch {}
   try { startMcgSyncScheduler(); console.log('[startup] MCG auto-pull scheduler started'); } catch {}
 };
 
-// Start server
-startServer();
+// Bind immediately so the platform can reach health/readiness endpoints while MongoDB initializes.
+server.listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+  console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
+});
+
+// Start database-dependent initialization after accepting platform health checks.
+startServer().catch((error) => {
+  databaseReady = process.env.SKIP_DB === '1';
+  console.error('[startup] Initialization failed; database-backed routes remain unavailable:', error?.message || error);
+});
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
