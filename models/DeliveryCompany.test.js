@@ -191,6 +191,12 @@ test('delivery API serialization removes stored secrets from company and order d
   assert.equal('credentials' in safe.apiConfiguration.integration.authentication, false);
   assert.equal('secret' in safe.apiConfiguration.integration.webhook, false);
   assert.deepEqual(safeOrder, { deliveryResponse: { status: 'created' } });
+  assert.deepEqual(sanitizeDeliverySecrets({
+    requestBody: { username: '{{auth.phone}}', password: '{{auth.password}}' },
+    credentials: { phone: 'stored-phone', password: 'stored-password' },
+  }), {
+    requestBody: { username: '{{auth.phone}}', password: '{{auth.password}}' },
+  });
 });
 
 test('legacy editor updates preserve stored values when secrets are blank or marked for removal', () => {

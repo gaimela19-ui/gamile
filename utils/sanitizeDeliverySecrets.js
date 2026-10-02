@@ -1,4 +1,9 @@
 const SENSITIVE_KEY = /(credential|password|secret|token|api[-_]?key|authorization|bearer|username|login|signature|database|headers|^db$)/i;
+const SAFE_AUTH_TEMPLATE = /^\s*\{\{\s*auth\.(phone|username|password)\s*\}\}\s*$/;
+
+function isSafeCredentialTemplate(value) {
+  return typeof value === 'string' && SAFE_AUTH_TEMPLATE.test(value);
+}
 
 function toPlainObject(value) {
   if (value && typeof value.toObject === 'function') {
@@ -15,7 +20,7 @@ export function sanitizeDeliverySecrets(value) {
 
   return Object.fromEntries(
     Object.entries(plainValue)
-      .filter(([key]) => !SENSITIVE_KEY.test(key))
+      .filter(([key, child]) => !SENSITIVE_KEY.test(key) || isSafeCredentialTemplate(child))
       .map(([key, child]) => [key, sanitizeDeliverySecrets(child)])
   );
 }

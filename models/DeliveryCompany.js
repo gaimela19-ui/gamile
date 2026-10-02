@@ -54,6 +54,9 @@ const authenticationConfigurationSchema = new mongoose.Schema({
   tokenMethod: { type: String, default: 'POST' },
   tokenRequest: { type: mongoose.Schema.Types.Mixed, default: {} },
   tokenResponsePath: { type: String },
+  tokenExpiresInPath: { type: String },
+  tokenCacheSeconds: { type: Number, min: 1, default: 300 },
+  timeoutMs: { type: Number, min: 1, default: 10000 },
   headers: { type: Map, of: String, default: {} },
   credentials: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { _id: false });
