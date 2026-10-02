@@ -26,6 +26,7 @@ const ALLOWED_TEMPLATE_VARIABLES = new Set([
   'order.customer_mobile',
   'order.customer_address',
   'order.customer_area',
+  'order.customer_area_id',
   'order.money_collection_cost',
   'order.shipping_cost',
   'order.note',
@@ -58,7 +59,17 @@ function hasConfiguredValue(value) {
   return true;
 }
 
-function makeOrderVariables(orderValue, extra = {}, authCredentials = {}) {
+function findCityMapping(cityMappings, address) {
+  const normalize = value => String(value ?? '').trim().toLowerCase();
+  const rows = Array.isArray(cityMappings) ? cityMappings.map(toPlain) : [];
+  for (const candidate of [address.area, address.city, address.state].map(normalize).filter(Boolean)) {
+    const row = rows.find(item => normalize(item?.storeCity) === candidate);
+    if (row) return row;
+  }
+  return undefined;
+}
+
+function makeOrderVariables(orderValue, extra = {}, authCredentials = {}, cityMappings = []) {
   const order = toPlain(orderValue) || {};
   const customer = order.customerInfo || {};
   const address = order.shippingAddress || {};
@@ -77,6 +88,7 @@ function makeOrderVariables(orderValue, extra = {}, authCredentials = {}) {
       customer_mobile: customer.mobile || customer.phone || '',
       customer_address: addressParts.join(', '),
       customer_area: address.area || address.city || address.state || '',
+      customer_area_id: findCityMapping(cityMappings, address)?.companyCityId,
       money_collection_cost: moneyCollectionCost,
       shipping_cost: shippingCost,
       note: order.deliveryNotes || order.note || order.notes || '',
@@ -113,6 +125,9 @@ function resolveTemplateExpression(expression, variables) {
   if (!ALLOWED_TEMPLATE_VARIABLES.has(variablePath)) throw new Error(`Unsupported template variable: ${variablePath}`);
   const value = getPath(variables, variablePath);
   if (transform === 'optional' && (value === undefined || value === null || value === '')) return undefined;
+  if (value === undefined && variablePath === 'order.customer_area_id') {
+    throw new Error(`No delivery company city is mapped for "${variables.order?.customer_area || 'unknown city'}"`);
+  }
   if (value === undefined) throw new Error(`Template variable is unavailable: ${variablePath}`);
   if (transform === 'optional') return value;
   return applyTransform(value, transform);
@@ -380,7 +395,7 @@ async function acquireAccessToken(integration, authConfiguration, variables, opt
     const detail = status ? `HTTP ${status}` : (error.code || 'no response');
     const loginTarget = `${authConfiguration.tokenMethod || 'POST'} ${preparedUrl.url.origin}${preparedUrl.url.pathname}`;
     console.error('[delivery/auth] login request failed:', detail, loginTarget);
-    throw new Error(`Authentication request failed (${detail}) at ${loginTarget}`);
+    throw new Error(`Authentication request failed (${detail}); see server log for the login URL`);
   }
 
   const tokenPath = authConfiguration.tokenResponsePath || 'token';
@@ -580,7 +595,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
     const selectedAuthentication = endpoint.authentication && endpoint.authentication.type !== 'inherit'
       ? endpoint.authentication
       : configuredAuthentication;
-    const variables = makeOrderVariables(args.order || {}, args.extra || {}, selectedAuthentication.credentials || {});
+    const variables = makeOrderVariables(args.order || {}, args.extra || {}, selectedAuthentication.credentials || {}, integration.cityMappings);
     const resolvedPath = endpointUrl(integration, endpoint, variables);
     const urlCheck = await validateAndPinUrl(resolvedPath, options.allowPrivateNetwork === true);
     const url = urlCheck.url;

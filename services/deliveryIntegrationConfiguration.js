@@ -16,6 +16,7 @@ export const DELIVERY_TEMPLATE_VARIABLES = [
   'order.customer_mobile',
   'order.customer_address',
   'order.customer_area',
+  'order.customer_area_id',
   'order.money_collection_cost',
   'order.shipping_cost',
   'order.note',
