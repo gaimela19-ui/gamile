@@ -579,6 +579,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
   let lastRequestId = null;
   let secrets = new Set();
   let requestDispatched = false;
+  let templateUsed;
 
   try {
     integration = await resolveIntegration(args.integration);
@@ -616,6 +617,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
       : (hasConfiguredValue(endpoint.requestBody)
         ? endpoint.requestBody
         : (hasConfiguredValue(endpoint.requestMapping) ? endpoint.requestMapping : configuredIntegration.requestMapping));
+    templateUsed = bodyTemplate;
     const requestBody = bodyTemplate == null
       ? undefined
       : (hasRequestBodyOverride ? bodyTemplate : renderTemplate(bodyTemplate, variables));
@@ -721,6 +723,7 @@ export async function executeDeliveryEndpoint(args = {}, options = {}) {
       endpoint: safeEndpoint,
       requestId: lastRequestId,
       requestDispatched,
+      requestTemplate: templateUsed === undefined ? undefined : sanitizeAndRedact(templateUsed, secrets),
       requestShape: requestMetadata.body && typeof requestMetadata.body === 'object' && !Array.isArray(requestMetadata.body)
         ? Object.fromEntries(Object.entries(requestMetadata.body).map(([key, value]) => [key, value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value]))
         : undefined,
