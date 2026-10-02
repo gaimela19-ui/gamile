@@ -10,6 +10,12 @@ const fieldMappingSchema = new mongoose.Schema({
   defaultValuePriority: { type: Boolean, default: false },
 }, { _id: false });
 
+const cityMappingSchema = new mongoose.Schema({
+  storeCity: { type: String, required: true, trim: true },
+  companyCityId: { type: mongoose.Schema.Types.Mixed, required: true },
+  companyCityName: { type: String, trim: true, default: '' },
+}, { _id: false });
+
 const statusMappingSchema = new mongoose.Schema({
   companyStatus: { type: String, required: true },
   internalStatus: { type: String, required: true },
@@ -150,6 +156,7 @@ const deliveryCompanySchema = new mongoose.Schema({
   fieldMapping: { type: mongoose.Schema.Types.Mixed, default: {} },
   apiConfiguration: { type: apiConfigurationSchema, default: () => ({}) },
   fieldMappings: { type: [fieldMappingSchema], default: [] },
+  cityMappings: { type: [cityMappingSchema], default: [] },
   statusMapping: { type: [statusMappingSchema], default: [] },
   customFields: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { timestamps: true });
