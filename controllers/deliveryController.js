@@ -12,6 +12,49 @@ import {
   validateDeliveryIntegrationConfiguration,
 } from '../services/deliveryIntegrationConfiguration.js';
 import { DELIVERY_TEMPLATE_VARIABLES, DELIVERY_INTERNAL_STATUSES } from '../services/deliveryIntegrationConfiguration.js';
+import { executeDeliveryEndpoint } from '../services/deliveryApiEngine.js';
+
+function extractCityList(raw) {
+  const list = Array.isArray(raw) ? raw
+    : Array.isArray(raw?.data) ? raw.data
+    : Array.isArray(raw?.data?.cities) ? raw.data.cities
+    : Array.isArray(raw?.cities) ? raw.cities
+    : Object.values(raw || {}).find(Array.isArray) || [];
+  return list
+    .map(item => ({
+      id: item?.city_id ?? item?.id ?? item?.cityId ?? item?.code,
+      name: String(item?.name ?? item?.city_name ?? item?.title ?? item?.label ?? '').trim(),
+    }))
+    .filter(city => city.id !== undefined && city.id !== null && city.name);
+}
+
+// Fetch the provider's real city list using the company's saved authentication
+export const fetchCompanyCities = async (req, res) => {
+  try {
+    const company = await DeliveryCompany.findById(req.params.id);
+    if (!company) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Delivery company not found' });
+    const url = String(req.body?.url || company.settings?.citiesUrl || '').trim();
+    if (!/^https:\/\//i.test(url)) {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'A https:// cities URL is required' });
+    }
+    const result = await executeDeliveryEndpoint({
+      integration: company.toObject(),
+      endpoint: { name: 'listCities', method: 'GET', url, timeoutMs: 20000 },
+      order: {},
+    });
+    if (!result.success) {
+      return res.status(StatusCodes.BAD_GATEWAY).json({ message: result.error?.message || 'Could not fetch cities' });
+    }
+    const cities = extractCityList(result.rawResponse);
+    if (!cities.length) {
+      return res.status(StatusCodes.BAD_GATEWAY).json({ message: 'The response did not contain a recognizable city list' });
+    }
+    res.json({ cities });
+  } catch (error) {
+    console.error('[delivery/cities] failed:', error?.message || error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: error?.message || 'Could not fetch cities' });
+  }
+};
 
 async function getGenericActivationIssues(company) {
   const integrationConfig = company.apiConfiguration?.integration || {};

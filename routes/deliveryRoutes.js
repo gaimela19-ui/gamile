@@ -25,6 +25,7 @@ import {
   updateCompanyEndpoint,
   deleteCompanyEndpoint,
   testConfiguredEndpoint,
+  fetchCompanyCities,
 } from '../controllers/deliveryController.js';
 
 const router = express.Router();
@@ -48,6 +49,7 @@ router.post('/companies/:id/endpoints', deliveryAdminGuard, createCompanyEndpoin
 router.put('/companies/:id/endpoints/:endpointId', deliveryAdminGuard, updateCompanyEndpoint);
 router.delete('/companies/:id/endpoints/:endpointId', deliveryAdminGuard, deleteCompanyEndpoint);
 router.post('/companies/:id/test-endpoint', deliveryAdminGuard, testConfiguredEndpoint);
+router.post('/companies/:id/fetch-cities', deliveryAdminGuard, fetchCompanyCities);
 router.put('/companies/:id/field-mappings', deliveryAdminGuard, updateFieldMappings);
 router.post('/companies/:id/test-connection', deliveryAdminGuard, testConnection);
 // Validate config + show effective db sources
